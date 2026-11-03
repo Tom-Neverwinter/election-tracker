@@ -86,6 +86,7 @@
 <script src="past/control.js"></script>
 <script src="results-data.js"></script>
 <script src="measures.js"></script>
+<script src="past/measures.js"></script>
 <script type="module">
 // ---- live data is fetched fresh on open, unless ?day=YYYY-MM-DD picks a saved snapshot ----
 const status = t => document.getElementById('updated').textContent = t;
@@ -120,7 +121,7 @@ function localStore(k, v) { try { return v === undefined ? localStorage.getItem(
 document.getElementById('updated').textContent =
   `${saved ? 'Snapshot from' : 'Live as of'} ${new Date(D.updated).toLocaleString()} · consensus = average of ${D.governor.raters.length}–${D.senate.raters.length} forecasters + Polymarket odds`;
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
-  year = LIVE[b.dataset.o] ?? (b.dataset.o === 'states' ? CTRL_LATEST : HOUSE_LATEST); office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
+  year = LIVE[b.dataset.o] ?? ({ states: CTRL_LATEST, measures: MEAS_NOW }[b.dataset.o] ?? HOUSE_LATEST); office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
 });
 if (!D.early) document.querySelector('[data-o=early]').remove();
 if (office === 'early' && !D.early) office = 'governor';
@@ -167,7 +168,7 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
   geo = topojson.feature(us, us.objects.states).features;
   d3.select('#map').append('g').selectAll('path').data(geo).join('path')
     .attr('class', 'st').attr('d', d3.geoPath())
-    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? MEAS.some(m => m.state === f.properties.name) : office === 'results' ? (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
     .append('title');
   render();
 });
@@ -255,26 +256,42 @@ function renderResults() {
 const MEAS = window.MEASURES ?? [];
 const measColor = d3.scaleSequential([-4, 14], d3.interpolatePurples).clamp(true); // start below 0 so 1-measure states aren't near-white
 const propResults = st => (R?.races ?? []).filter(r => r.state === st && !RKIND[r.office]); // anything that isn't Senate/Governor/House
+const PASTM = window.MEASURES_PAST ?? []; // past years: {year, state, name, desc, topic, result, yes, source}
+const MEAS_NOW = 2026;
+const measYears = () => [...new Set(PASTM.map(m => m.year))].sort((a, b) => b - a);
+const passColor = d3.scaleSequential([0, 1], d3.interpolateRdYlGn); // share of a state's measures that passed
 function renderMeasures() {
-  const g = d3.group(MEAS, m => m.state), el = document.getElementById('detail');
-  document.getElementById('legend').innerHTML = [1, 3, 6, 10, 14].map(v => `<span><i style="background:${measColor(v)}"></i>${v}${v === 14 ? '+' : ''}</span>`).join('') + '<span><i style="background:var(--none)"></i>None</span> <span>statewide measures on the ballot</span>';
-  d3.selectAll('path.st').attr('fill', f => g.has(f.properties.name) ? measColor(g.get(f.properties.name).length) : 'var(--none)').classed('sel', f => f.properties.name === sel)
-    .select('title').text(f => `${f.properties.name}: ${g.get(f.properties.name)?.length ?? 0} measures`);
-  const topics = d3.rollups(MEAS, v => v.length, m => m.topic).sort((a, b) => b[1] - a[1]);
-  document.getElementById('seats').innerHTML = '';
+  const now = year === MEAS_NOW, list = now ? MEAS : PASTM.filter(m => m.year === year);
+  const g = d3.group(list, m => m.state), el = document.getElementById('detail');
+  const passed = ms => ms.filter(m => m.result === 'Passed').length;
+  document.getElementById('legend').innerHTML = (now
+    ? [1, 3, 6, 10, 14].map(v => `<span><i style="background:${measColor(v)}"></i>${v}${v === 14 ? '+' : ''}</span>`).join('') + '<span><i style="background:var(--none)"></i>None</span> <span>statewide measures on the ballot</span>'
+    : [[0, 'All failed'], [0.5, 'Half passed'], [1, 'All passed']].map(([v, l]) => `<span><i style="background:${passColor(v)}"></i>${l}</span>`).join('') + '<span><i style="background:var(--none)"></i>No measures recorded</span>');
+  d3.selectAll('path.st').attr('fill', f => { const ms = g.get(f.properties.name); return !ms ? 'var(--none)' : now ? measColor(ms.length) : passColor(passed(ms) / ms.length); })
+    .classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => { const ms = g.get(f.properties.name) ?? []; return `${f.properties.name}: ${ms.length} measures${now || !ms.length ? '' : `, ${passed(ms)} passed`}`; });
+  const topics = d3.rollups(list, v => v.length, m => m.topic).sort((a, b) => b[1] - a[1]);
+  const all = list.length, p = passed(list);
+  document.getElementById('seats').innerHTML = now || !all ? '' : `<div style="flex:${p};background:${passColor(1)};color:#fff" title="Passed: ${p}">${p} passed</div><div style="flex:${all - p};background:${passColor(0)};color:#fff" title="Failed: ${all - p}">${all - p} failed</div>`;
+  const badge = m => m.result ? ` <b style="color:${m.result === 'Passed' ? '#2f9e44' : '#e03131'}">${m.result}${m.yes != null ? ` ${m.yes}%` : ''}</b>` : '';
   const res = r => { const y = r.cands.find(c => /^yes/i.test(c.name)), n = r.cands.find(c => /^no/i.test(c.name));
     return `${esc(r.name)}: ${y ? `Yes ${y.pct}%` : ''}${n ? ` · No ${n.pct}%` : ''} · ${Math.round(r.pctIn ?? 0)}% in${r.called ? ` · <b>${esc(r.winner ?? 'called')}</b>` : ''}`; };
   const mine = sel && g.get(sel);
-  if (mine) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(sel)}: ${mine.length} measure${mine.length > 1 ? 's' : ''}</h2>` +
-    mine.map(m => `<div style="margin-top:10px"><b>${esc(m.name)}</b> <span class="pill" style="padding:1px 6px;font-size:11px">${esc(m.topic)}</span><div class="sub">${esc(m.summary)} <a href="${esc(m.source)}" target="_blank" rel="noopener">source</a></div></div>`).join('') +
-    (propResults(sel).length ? `<div style="margin-top:12px"><b>Results</b>${propResults(sel).map(r => `<div class="sub">${res(r)}</div>`).join('')}</div>` : '');
-  else el.innerHTML = `<h2 style="margin:0;font-size:18px">2026 ballot measures</h2><div class="sub">${MEAS.length} statewide measures in ${g.size} states</div>
-    <div style="margin:8px 0">${topics.map(([t, n]) => `${esc(t)} ${n}`).join(' · ')}</div><p class="sub">Click a state for its measures. Results appear on election night once results.js has run.</p>`;
-  head([['state', 'State'], ['name', 'Measure'], ['topic', 'Topic'], [null, 'What a yes vote does']], 'Every statewide measure on the Nov 3 ballot. Click a column to sort.');
+  if (mine) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(sel)} · ${year}: ${mine.length} measure${mine.length > 1 ? 's' : ''}${now ? '' : `, ${passed(mine)} passed`}</h2>` +
+    mine.map(m => `<div style="margin-top:10px"><b>${esc(m.name)}</b>${badge(m)} <span class="pill" style="padding:1px 6px;font-size:11px">${esc(m.topic)}</span><div class="sub">${esc(m.summary ?? m.desc ?? '')} <a href="${esc(m.source)}" target="_blank" rel="noopener">source</a></div></div>`).join('') +
+    (now && propResults(sel).length ? `<div style="margin-top:12px"><b>Results</b>${propResults(sel).map(r => `<div class="sub">${res(r)}</div>`).join('')}</div>` : '') +
+    (PASTM.some(m => m.state === sel) ? `<div class="sub" style="margin-top:12px">${esc(sel)} all years on record: ${PASTM.filter(m => m.state === sel).length} measures, ${passed(PASTM.filter(m => m.state === sel))} passed, since ${d3.min(PASTM.filter(m => m.state === sel), m => m.year)}.</div>` : '');
+  else el.innerHTML = `<h2 style="margin:0;font-size:18px">${year} ballot measures</h2><div class="sub">${all} statewide measures in ${g.size} states${now ? '' : ` · ${p} passed, ${all - p} failed`}</div>
+    <div style="margin:8px 0">${topics.map(([t, n]) => `${esc(t)} ${n}`).join(' · ')}</div><p class="sub">Click a state for its measures.${now ? ' Results appear on election night once results.js has run.' : ''}</p>`;
+  head([['state', 'State'], ['name', 'Measure'], ['topic', 'Topic'], ...(now ? [] : [['result', 'Result'], ['yes', 'Yes %']]), [null, now ? 'What a yes vote does' : 'Subject']],
+    now ? 'Every statewide measure on the Nov 3 ballot. Click a column to sort.' : `Statewide measures voted on in ${year}. Click a column to sort.`);
   const tb = document.getElementById('rows');
-  tb.innerHTML = sorted(MEAS, m => sortKey === 'abs' ? m.state + m.name : m[sortKey] ?? '').map(m => `<tr data-s="${esc(m.state)}"><td><b>${esc(m.state)}</b></td><td>${esc(m.name)}</td><td>${esc(m.topic)}</td><td class="sub">${esc(m.summary)}</td></tr>`).join('');
+  tb.innerHTML = sorted(list, m => sortKey === 'abs' ? m.state + m.name : m[sortKey] ?? '').map(m => `<tr data-s="${esc(m.state)}"><td><b>${esc(m.state)}</b></td><td>${esc(m.name)}</td><td>${esc(m.topic)}</td>
+    ${now ? '' : `<td>${badge(m).replace(/ [\d.]+%/, '')}</td><td>${m.yes != null ? m.yes + '%' : '—'}</td>`}<td class="sub">${esc(m.summary ?? m.desc ?? '')}</td></tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
-  document.getElementById('srcs').innerHTML = 'Sources: Wikipedia, <a href="https://en.wikipedia.org/wiki/2026_United_States_ballot_measures">2026 United States ballot measures</a> and each measure\'s page; summaries written for this site. Ballotpedia counts 145 measures; one is missing here.';
+  document.getElementById('srcs').innerHTML = now
+    ? 'Sources: Wikipedia, <a href="https://en.wikipedia.org/wiki/2026_United_States_ballot_measures">2026 United States ballot measures</a> and each measure\'s page; summaries written for this site. Ballotpedia counts 145 measures; one is missing here.'
+    : 'Sources: Wikipedia\'s state ballot-measure lists, yearly "United States ballot measures" pages, and individual measure pages.';
 }
 
 // ---- States tab: who controls each state government (past/control.js) ----
@@ -314,10 +331,10 @@ function renderStates() {
 // ---- Past years on the Governor / Senate / President tabs (past/*.js) ----
 const LIVE = { governor: 2026, senate: 2026, president: 2028, ...(D.house ? { house: 2026 } : {}) }; // old snapshots have no House forecast
 const HOUSE_LATEST = Math.max(...Object.keys(HOUSE.national).map(Number)); // House has no forecast here, only past delegations
-let year = +hashYear || LIVE[office] || (office === 'states' ? Math.max(...Object.values(window.CONTROL ?? {}).flatMap(s => Object.keys(s).map(Number))) : HOUSE_LATEST); // #president/1860 opens a past year
+let year = +hashYear || LIVE[office] || (office === 'measures' ? 2026 : office === 'states' ? Math.max(...Object.values(window.CONTROL ?? {}).flatMap(s => Object.keys(s).map(Number))) : HOUSE_LATEST); // #president/1860 opens a past year
 const isPast = () => office === 'house' && !LIVE.house || office in LIVE && year !== LIVE[office];
 if (isPast()) sortKey = 'margin';
-const pastYears = o => o === 'states' ? ctrlYears() : o === 'house' ? Object.keys(HOUSE.national).map(Number).reverse() : o === 'president' ? [...PRESIDENT.years].reverse()
+const pastYears = o => o === 'states' ? ctrlYears() : o === 'measures' ? measYears() : o === 'house' ? Object.keys(HOUSE.national).map(Number).reverse() : o === 'president' ? [...PRESIDENT.years].reverse()
   : [...new Set([...Object.values(o === 'senate' ? SENATE : GOVERNOR).flatMap(x => Object.keys(x).map(y => parseInt(y))),
       ...(o === 'senate' ? Object.keys(SENATE_SEATS.national).map(Number).filter(y => y < 1976) : [])])].sort((a, b) => b - a);
 // Seat-holding view: the House always; the Senate before 1976 (no popular-vote results here before then)
@@ -326,11 +343,11 @@ const chamber = () => office === 'house' ? 'House' : 'Senate';
 const yearSel = document.getElementById('year');
 yearSel.onchange = () => { year = +yearSel.value; sel = null; sortKey = isPast() ? 'margin' : 'abs'; sortDir = 1; render(); };
 function yearPicker() {
-  yearSel.hidden = !(office in LIVE || office === 'house' || office === 'states');
+  yearSel.hidden = !(office in LIVE || office === 'house' || office === 'states' || office === 'measures' && PASTM.length > 0);
   if (yearSel.hidden) return;
   if (yearSel.dataset.o !== office) {
     yearSel.dataset.o = office;
-    yearSel.replaceChildren(...(office in LIVE ? [new Option(LIVE[office] + ' · forecast', LIVE[office])] : []), ...pastYears(office).map(y => new Option(y, y)));
+    yearSel.replaceChildren(...(office in LIVE ? [new Option(LIVE[office] + ' · forecast', LIVE[office])] : office === 'measures' ? [new Option(MEAS_NOW + ' · on the ballot', MEAS_NOW)] : []), ...pastYears(office).map(y => new Option(y, y)));
   }
   yearSel.value = year;
 }

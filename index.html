@@ -355,8 +355,11 @@ function pastRows() { // one row per contest that year: {state, label, d, r, par
   });
   for (const st of Object.keys(TURNOUT.states)) {
     if (office === 'president') {
-      const m = PRESIDENT.states[st]?.[year], w = PRESIDENT.wins[st]?.[yi];
+      const m = PRESIDENT.states[st]?.[year], w = PRESIDENT.wins[st]?.[yi], sh = PRESIDENT.shares?.[year]?.[st];
       if (m) rows.push({ state: st, label: st, d: m[0], r: m[1], party: SHORT[m[2]] ?? m[2], winner: '', margin: m[0] - m[1] });
+      else if (sh) { const get = p => sh.find(x => x[0] === p)?.[1], d = get('Democratic'), r = get('Republican'); // 1824-1972: a D or R winner is shaded by its lead over the runner-up, whoever that was
+        const lead = sh[0][1] - (sh[1]?.[1] ?? 0);
+        rows.push({ state: st, label: st, d, r, party: sh[0][0], winner: '', shares: sh, margin: sh[0][0] === 'Democratic' ? lead : sh[0][0] === 'Republican' ? -lead : null }); }
       else if (w) rows.push({ state: st, label: st, party: w, winner: '' });
       continue;
     }
@@ -389,7 +392,7 @@ function renderPast() {
   const el = document.getElementById('detail'), mine = sel ? g.get(sel) : null;
   if (mine) el.innerHTML = mine.map(r => `<h2 style="margin:0;font-size:18px">${esc(r.label)} · ${year} ${{ governor: 'Governor', senate: 'Senate', president: 'President', house: 'House delegation' }[office]}${seatSrc() && office === 'senate' ? ' seats' : ''}</h2>
       <div style="margin:10px 0 2px;font-size:20px;font-weight:600;color:${rowColor(r)}">${esc(r.party)}${r.winner && !seatSrc() ? ' · ' + esc(r.winner) : ''}</div>
-      ${seatSrc() ? `<div class="sub">${r.total} seats: ${esc(r.winner)}</div>` : r.margin != null ? `<div class="sub">D ${pc(r.d)} · R ${pc(r.r)} · margin ${signed(r.margin)}</div>` : '<div class="sub">Party that carried the state. State vote shares are included from 1976 on.</div>'}`).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
+      ${r.shares ? `<div class="sub">${r.shares.map(([p, v]) => `${esc(p)} ${v}%`).join(' · ')}</div>` : ''}${seatSrc() ? `<div class="sub">${r.total} seats: ${esc(r.winner)}</div>` : r.margin != null ? `<div class="sub">D ${pc(r.d)} · R ${pc(r.r)} · margin ${signed(r.margin)}</div>` : (r.shares ? '' : '<div class="sub">Party that carried the state; no statewide popular vote recorded for this year.</div>')}`).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
   else if (office === 'president') {
     const e = PRESIDENT.list.find(x => x[0] === year), [w, ru] = e[2];
     const line = c => `<b>${esc(c[0])}</b> (${esc(c[1])}) · ${num(c[2])} electoral${c[3] ? ` · ${num(c[3])} votes (${pc(c[4])})` : ''}`;
@@ -412,14 +415,14 @@ function renderPast() {
     return;
   }
   head([['label', 'State'], ['party', 'Won by'], ...(office === 'president' ? [] : [['winner', 'Winner']]), ['d', 'D %'], ['r', 'R %'], ['margin', 'Margin']],
-    byMargin ? 'Sorted by closest race. Margin = D % minus R %.' : 'Party that carried each state. State vote shares start in 1976.');
+    byMargin ? (office === 'president' && year < 1976 ? 'Sorted by closest race. Margin = winner minus runner-up (D + / R +); other parties in their own color.' : 'Sorted by closest race. Margin = D % minus R %.') : office === 'president' && year >= 1824 ? 'Party that carried each state; shading by margin where Democrats and Republicans were the top two.' : 'Party that carried each state. State popular votes start in 1824.');
   const val = r => sortKey === 'margin' ? Math.abs(r.margin ?? 999) : r[sortKey] ?? '';
   const tb = document.getElementById('rows');
   tb.innerHTML = sorted(rows, val).map(r => `<tr data-s="${esc(r.state)}"><td><b>${esc(r.label)}</b></td><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rowColor(r)}"></span> ${esc(r.party)}</td>
     ${office === 'president' ? '' : `<td>${esc(r.winner)}</td>`}<td>${pc(r.d)}</td><td>${pc(r.r)}</td><td>${signed(r.margin)}</td></tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   document.getElementById('srcs').innerHTML = office === 'president'
-    ? 'Sources: state results 1976–2024 from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>; which party carried each state before that from <a href="https://en.wikipedia.org/wiki/List_of_United_States_presidential_election_results_by_state">Wikipedia</a>; national totals from Wikipedia\'s yearly election pages.'
+    ? 'Sources: state results 1976–2024 from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>; popular-vote shares 1824–1972 from each election\'s Wikipedia page; which party carried each state from <a href="https://en.wikipedia.org/wiki/List_of_United_States_presidential_election_results_by_state">Wikipedia</a>; national totals from Wikipedia\'s yearly election pages.'
     : `Sources: ${office === 'senate' ? '<a href="https://electionlab.mit.edu/data">MIT Election Lab</a>. Before 1976 the Senate tab shows seat holdings from <a href="https://voteview.com/data">Voteview</a>.' : "Wikipedia's yearly gubernatorial election tables. History here starts in 1976."}`;
 }
 

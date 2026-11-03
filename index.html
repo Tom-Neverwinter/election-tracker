@@ -44,7 +44,8 @@
   <div class="sub" id="updated"></div>
 
   <div class="bar">
-    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="president">President 2028</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
+    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="president">President</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
+    <select class="pill" id="year" aria-label="Election year" style="color:inherit" hidden></select>
     <select class="pill" id="day" aria-label="Show data from" style="color:inherit"><option value="">Live</option></select>
     <div class="pill" id="control"></div>
   </div>
@@ -73,7 +74,10 @@
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <script src="data.js"></script>
 <script src="history.js"></script>
-<script src="past.js"></script>
+<script src="past/president.js"></script>
+<script src="past/senate.js"></script>
+<script src="past/governor.js"></script>
+<script src="past/turnout.js"></script>
 <script type="module">
 // ---- live data is fetched fresh on open, unless ?day=YYYY-MM-DD picks a saved snapshot ----
 const status = t => document.getElementById('updated').textContent = t;
@@ -97,10 +101,11 @@ const CATS = [ // score thresholds on the −3 (Safe R) … +3 (Safe D) scale
 ];
 const cat = s => CATS.find(([t]) => s >= t);
 const color = s => s == null ? 'var(--none)' : cat(s)[2];
+const PAST = { national: TURNOUT.national, pres: PRESIDENT.list, states: Object.fromEntries(Object.keys(TURNOUT.states).map(n => [n, { t: TURNOUT.states[n], p: PRESIDENT.states[n] ?? {}, s: SENATE[n] ?? {}, g: GOVERNOR[n] ?? {} }])) };
 const pct = p => p == null ? '—' : Math.round(p * 100) + '%';
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-let office = location.hash.slice(1) || localStore('office') || 'governor', sel = null, sortKey = 'abs', sortDir = 1, geo;
+let [office, hashYear] = location.hash.slice(1).split('/'); office ||= localStore('office') || 'governor'; let sel = null, sortKey = 'abs', sortDir = 1, geo;
 
 function localStore(k, v) { try { return v === undefined ? localStorage.getItem(k) : localStorage.setItem(k, v); } catch { return null; } }
 
@@ -109,14 +114,14 @@ document.getElementById('updated').textContent =
 document.getElementById('control').innerHTML = Object.entries(D.control).map(([ch, o]) =>
   `${ch} control (Polymarket): ` + Object.entries(o).map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ')).join(' &nbsp;·&nbsp; ');
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
-  office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
+  year = LIVE[b.dataset.o]; office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
 });
 if (!D.early) document.querySelector('[data-o=early]').remove();
 if (office === 'early' && !D.early) office = 'governor';
 if (!D.president) document.querySelector('[data-o=president]').remove();
 if (office === 'president' && !D.president) office = 'governor';
 for (const r of D.president?.races ?? []) { // 2024 result is the "held by" baseline, and the fallback where no market exists yet
-  const p = window.PAST?.states[r.state]?.p?.[2024];
+  const p = PRESIDENT.states[r.state]?.[2024];
   if (!p) continue;
   r.incParty = p[2]; r.incumbent = `2024: D ${p[0]} · R ${p[1]}`;
   if (r.score == null) { r.score = Math.round(Math.max(-3, Math.min(3, (p[0] - p[1]) / 5)) * 100) / 100; r.note = 'no market yet, 2024 margin'; } // ponytail: 15+ pt margin = Safe
@@ -156,18 +161,20 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
   geo = topojson.feature(us, us.objects.states).features;
   d3.select('#map').append('g').selectAll('path').data(geo).join('path')
     .attr('class', 'st').attr('d', d3.geoPath())
-    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'early' ? EV.has(f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
     .append('title');
   render();
 });
 
 function render() {
+  yearPicker();
   document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-pressed', b.dataset.o === office));
   document.getElementById('modes').hidden = office !== 'early';
   document.getElementById('hmodes').hidden = office !== 'history';
   renderFlow();
   if (office === 'early') return renderEarly();
   if (office === 'history') return renderHistory();
+  if (isPast()) return renderPast();
   document.getElementById('legend').innerHTML = CATS.map(c => `<span><i style="background:${c[2]}"></i>${c[1]}</span>`).join('') +
     `<span><i style="background:var(--none)"></i>No race</span>`;
   const g = byState();
@@ -180,6 +187,88 @@ function render() {
     });
   renderSeats(); renderDetail(); renderTable();
   document.getElementById('srcs').innerHTML = office === 'president' ? `Sources: <a href="https://polymarket.com">Polymarket</a> state and national 2028 markets (thin: a few thousand dollars traded per state); where a state has no market, its 2024 margin from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>. <a href="${D.president.wiki}">Wikipedia: 2028 election</a>.` : `Sources: <a href="${D[office].wiki}">Wikipedia's ${office} ratings table</a> (${D[office].raters.map(esc).join(', ')}) and <a href="https://polymarket.com">Polymarket</a>.`;
+}
+
+// ---- Past years on the Governor / Senate / President tabs (past/*.js) ----
+const LIVE = { governor: 2026, senate: 2026, president: 2028 };
+let year = +hashYear || LIVE[office]; // #president/1860 opens a past year
+const isPast = () => office in LIVE && year !== LIVE[office];
+if (isPast()) sortKey = 'margin';
+const pastYears = o => o === 'president' ? [...PRESIDENT.years].reverse()
+  : [...new Set(Object.values(o === 'senate' ? SENATE : GOVERNOR).flatMap(x => Object.keys(x).map(y => parseInt(y))))].sort((a, b) => b - a);
+const yearSel = document.getElementById('year');
+yearSel.onchange = () => { year = +yearSel.value; sel = null; sortKey = isPast() ? 'margin' : 'abs'; sortDir = 1; render(); };
+function yearPicker() {
+  yearSel.hidden = !(office in LIVE);
+  if (yearSel.hidden) return;
+  if (yearSel.dataset.o !== office) {
+    yearSel.dataset.o = office;
+    yearSel.replaceChildren(new Option(LIVE[office] + ' · forecast', LIVE[office]), ...pastYears(office).map(y => new Option(y, y)));
+  }
+  yearSel.value = year;
+}
+// Parties that carried a state before 1976 (president only); D/R keep the site's colors.
+const PARTY_COLOR = { Democratic: 'var(--d)', Republican: 'var(--r)', 'Democratic-Republican': '#2e8b57', Federalist: '#d98c1f', Whig: '#d4b62c',
+  Jacksonian: '#6c9bd6', 'National Republican': '#c9935a', 'Anti-Jacksonian': '#c9935a', 'Southern Democratic': '#8a8a3a', "States' Rights": '#8a8a3a', Independent: '#9b6bcc',
+  'American Independent': '#7b5ea7', Progressive: '#3aa8a0', Populist: '#b07a2a', 'Liberal Republican': '#e08a8a', 'Constitutional Union': '#88a0b8',
+  'Know Nothing': '#b5651d', Nullifier: '#777', 'Anti-Masonic': '#c77dbb',
+  'No party (Washington)': '#8c7a5b', 'Democratic-Republican (Crawford)': '#7fbf9a', 'Democratic-Republican (Clay)': '#a3c47a', 'Split electors': '#aaa' };
+const SHORT = { D: 'Democratic', R: 'Republican', I: 'Independent', O: 'Independent' };
+function pastRows() { // one row per contest that year: {state, label, d, r, party, winner, margin}
+  const yi = PRESIDENT.years.indexOf(year), rows = [];
+  for (const st of Object.keys(TURNOUT.states)) {
+    if (office === 'president') {
+      const m = PRESIDENT.states[st]?.[year], w = PRESIDENT.wins[st]?.[yi];
+      if (m) rows.push({ state: st, label: st, d: m[0], r: m[1], party: SHORT[m[2]] ?? m[2], winner: '', margin: m[0] - m[1] });
+      else if (w) rows.push({ state: st, label: st, party: w, winner: '' });
+      continue;
+    }
+    const src = (office === 'senate' ? SENATE : GOVERNOR)[st] ?? {};
+    for (const k of [year, year + 's']) if (src[k]) {
+      const [d, r, p, name] = src[k];
+      rows.push({ state: st, label: st + (String(k).endsWith('s') ? ' (special)' : ''), d, r, party: SHORT[p] ?? p, winner: name ?? '', margin: d != null && r != null ? d - r : null });
+    }
+  }
+  return rows;
+}
+const marginScore = m => Math.max(-3, Math.min(3, m / 5)); // same color steps as the forecasts: 2.5 / 7.5 / 12.5 point margins
+const DR = new Set(['Democratic', 'Republican']);
+const rowColor = r => r.margin != null && DR.has(r.party) ? color(marginScore(r.margin)) : PARTY_COLOR[r.party] ?? '#999'; // third-party winners take their party color
+const signed = m => m == null ? '—' : (m > 0 ? 'D +' : m < 0 ? 'R +' : 'Tie ') + Math.abs(m).toFixed(1);
+function renderPast() {
+  const rows = pastRows(), g = d3.group(rows, r => r.state), byMargin = rows.some(r => r.margin != null);
+  const parties = [...new Set(rows.map(r => r.party))];
+  document.getElementById('legend').innerHTML = (byMargin
+    ? CATS.map((c, i) => `<span><i style="background:${c[2]}"></i>${['D +12.5', 'D +7.5', 'D +2.5', 'Within 2.5', 'R +2.5', 'R +7.5', 'R +12.5'][i]}</span>`).join('') + parties.filter(p => !DR.has(p)).map(p => `<span><i style="background:${PARTY_COLOR[p] ?? '#999'}"></i>${esc(p)}</span>`).join('')
+    : parties.map(p => `<span><i style="background:${PARTY_COLOR[p] ?? '#999'}"></i>${esc(p)}</span>`).join('')) +
+    `<span><i style="background:var(--none)"></i>${office === 'president' ? 'No electors' : 'No race'}</span>`;
+  d3.selectAll('path.st')
+    .attr('fill', f => g.has(f.properties.name) ? rowColor(g.get(f.properties.name)[0]) : 'var(--none)')
+    .classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => (g.get(f.properties.name) ?? [{ label: f.properties.name, party: null }])
+      .map(r => `${r.label}: ${r.party ? `${r.party}${r.winner ? ' (' + r.winner + ')' : ''} ${r.margin != null ? signed(r.margin) : ''}` : 'no race'}`).join('\n'));
+  const won = d3.rollups(rows, v => v.length, r => r.party).sort((a, b) => b[1] - a[1]);
+  document.getElementById('seats').innerHTML = won.map(([p, n]) => `<div style="flex:${n};background:${PARTY_COLOR[p] ?? '#999'};color:#fff" title="${esc(p)}: ${n} states">${n}</div>`).join('');
+  const el = document.getElementById('detail'), mine = sel ? g.get(sel) : null;
+  if (mine) el.innerHTML = mine.map(r => `<h2 style="margin:0;font-size:18px">${esc(r.label)} · ${year} ${{ governor: 'Governor', senate: 'Senate', president: 'President' }[office]}</h2>
+      <div style="margin:10px 0 2px;font-size:20px;font-weight:600;color:${rowColor(r)}">${esc(r.party)}${r.winner ? ' · ' + esc(r.winner) : ''}</div>
+      ${r.margin != null ? `<div class="sub">D ${pc(r.d)} · R ${pc(r.r)} · margin ${signed(r.margin)}</div>` : '<div class="sub">Party that carried the state. State vote shares are included from 1976 on.</div>'}`).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
+  else if (office === 'president') {
+    const e = PRESIDENT.list.find(x => x[0] === year), [w, ru] = e[2];
+    const line = c => `<b>${esc(c[0])}</b> (${esc(c[1])}) · ${num(c[2])} electoral${c[3] ? ` · ${num(c[3])} votes (${pc(c[4])})` : ''}`;
+    el.innerHTML = `<h2 style="margin:0;font-size:18px">${year} presidential election</h2><div style="margin:8px 0">Winner: ${line(w)}</div>${ru ? `<div class="sub">Runner-up: ${line(ru)}</div>` : ''}
+      ${e[1] ? `<div class="sub">Turnout ${pc(e[1])} of eligible voters</div>` : ''}${PRES_NOTES[year] ? `<div class="warn">${esc(PRES_NOTES[year])}</div>` : ''}<p class="sub">Click a state for its result.</p>`;
+  } else el.innerHTML = `<h2 style="margin:0;font-size:18px">${year} ${office} elections</h2><div class="sub">${rows.length} races · ${won.map(([p, n]) => `${esc(p)} ${n}`).join(' · ')}</div><p class="sub">Click a state for its result.</p>`;
+  head([['label', 'State'], ['party', 'Won by'], ...(office === 'president' ? [] : [['winner', 'Winner']]), ['d', 'D %'], ['r', 'R %'], ['margin', 'Margin']],
+    byMargin ? 'Sorted by closest race. Margin = D % minus R %.' : 'Party that carried each state. State vote shares start in 1976.');
+  const val = r => sortKey === 'margin' ? Math.abs(r.margin ?? 999) : r[sortKey] ?? '';
+  const tb = document.getElementById('rows');
+  tb.innerHTML = sorted(rows, val).map(r => `<tr data-s="${esc(r.state)}"><td><b>${esc(r.label)}</b></td><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rowColor(r)}"></span> ${esc(r.party)}</td>
+    ${office === 'president' ? '' : `<td>${esc(r.winner)}</td>`}<td>${pc(r.d)}</td><td>${pc(r.r)}</td><td>${signed(r.margin)}</td></tr>`).join('');
+  tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  document.getElementById('srcs').innerHTML = office === 'president'
+    ? 'Sources: state results 1976–2024 from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>; which party carried each state before that from <a href="https://en.wikipedia.org/wiki/List_of_United_States_presidential_election_results_by_state">Wikipedia</a>; national totals from Wikipedia\'s yearly election pages.'
+    : `Sources: ${office === 'senate' ? '<a href="https://electionlab.mit.edu/data">MIT Election Lab</a>' : "Wikipedia's yearly gubernatorial election tables"}. History here starts in 1976.`;
 }
 
 // Seats not on the ballot in 2026. Senate D includes the 2 independents who caucus with Democrats (King, Sanders).
@@ -216,8 +305,8 @@ function renderFlow() {
     <div class="sub">No seat-by-seat data for the House here, so this is market odds only.</div></div>${presLine()}`;
 }
 
-// ---- History tab: 50 years of results and turnout (past.js) ----
-const P = window.PAST?.states ?? {};
+// ---- History tab: 50 years of results and turnout (past/*.js) ----
+const P = PAST.states;
 const turnoutColor = d3.scaleSequential([30, 70], d3.interpolateGreens).clamp(true);
 const pc = v => v == null ? '—' : v.toFixed(1) + '%';
 const result = r => !r ? '—' : `${tag(r[2])} ${r[3] ? esc(r[3]) + ' ' : ''}<span class="sub">${r[0] ? 'D ' + r[0] : ''}${r[0] && r[1] ? ' · ' : ''}${r[1] ? 'R ' + r[1] : ''}</span>`;
@@ -353,7 +442,7 @@ function head(cols, note) { // cols: [key|null, label]
   const tr = document.getElementById('thead');
   tr.innerHTML = cols.map(([k, l]) => `<th${k ? ` data-k="${k}"` : ''}>${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
   tr.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
-    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; ({ early: renderEarly, history: renderHistory }[office] ?? renderTable)();
+    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory }[office] ?? renderTable)();
   });
 }
 const sorted = (rows, val) => [...rows].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sortDir);

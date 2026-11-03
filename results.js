@@ -23,12 +23,29 @@ function race(r, state) {
     pctIn: r.estimate_vote_percent ?? r.percent_in ?? null, votes: +r.total_vote || 0, called, winner: win?.name ?? null, winnerParty: win?.party ?? null, cands: cands.slice(0, 4) };
 }
 
+// General-election pages use a different shape: stateRaceResults.{discreteOffices (S, G), house, ballotProps}.
+const PARTY = { dem: 'Democratic', gop: 'Republican' };
+function general(r, state, office) {
+  const cands = r.candidates.map(c => ({ name: c.name, party: PARTY[c.party] ?? c.party ?? '', votes: +c.votes || 0, pct: +c.percentVote || 0, won: !!c.isWinner }))
+    .sort((a, b) => b.votes - a.votes);
+  const win = cands.find(c => c.won);
+  cands.forEach(c => delete c.won);
+  return { id: r.raceId ?? `${state}~${office}~${r.district ?? r.name}`, state, office, district: office === 'H' ? r.district ?? 0 : null, name: r.officeName || r.headlineText || r.name,
+    pctIn: r.percentIn ?? null, votes: +r.votes || 0, called: !!win, winner: win?.name ?? null, winnerParty: win?.party ?? null, cands: cands.slice(0, 4) };
+}
+const fromGeneral = (s, name) => !s ? [] : [
+  ...(s.discreteOffices ?? []).map(r => general(r, name, r.officeCode)),
+  ...(s.house ?? []).map(r => general(r, name, 'H')),
+  ...(s.ballotProps ?? []).map(r => general(r, name, r.officeCode || 'I')),
+];
+
 async function state(name) {
   const url = `https://www.nbcnews.com/firecracker/api/v2/state-results/2026-elections/${slug(name)}-results`;
   const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (ElectionTracker personal project)' } });
   if (!res.ok) throw new Error(`${res.status} ${name}`);
   const j = await res.json();
-  return collect(j, []).filter(r => String(r.election_date) === DAY).map(r => race(r, name));
+  const old = collect(j, []).filter(r => String(r.election_date) === DAY).map(r => race(r, name));
+  return old.length ? old : fromGeneral(j.stateRaceResults, name);
 }
 
 async function main() {

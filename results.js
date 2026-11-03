@@ -35,7 +35,7 @@ function general(r, state, office) {
 }
 const fromGeneral = (s, name) => !s ? [] : [
   ...(s.discreteOffices ?? []).map(r => general(r, name, r.officeCode)),
-  ...(s.house ?? []).map(r => general(r, name, 'H')),
+  ...(s.house ?? []).map(r => ({ ...general(r, name, 'H'), ...(s.house.length === 1 && { district: 0 }) })), // lone seat = at-large
   ...(s.ballotProps ?? []).map(r => general(r, name, r.officeCode || 'I')),
 ];
 

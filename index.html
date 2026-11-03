@@ -15,6 +15,8 @@
   .bar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:14px 0; }
   .tabs button, .modes button { font:inherit; padding:6px 14px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
   .tabs button:first-child, .modes button:first-child { border-radius:6px 0 0 6px; } .tabs button:last-child, .modes button:last-child { border-radius:0 6px 6px 0; }
+  .tabs { display:flex; } .tabs button { white-space:nowrap; }
+  details summary { cursor:pointer; color:var(--mute); font-size:13px; }
   .tabs button[aria-pressed=true], .modes button[aria-pressed=true] { background:var(--ink); color:var(--bg); }
   .pill { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:13px; }
   .grid { display:grid; grid-template-columns: minmax(0,2fr) minmax(280px,1fr); gap:16px; }
@@ -44,10 +46,11 @@
   <div class="sub" id="updated"></div>
 
   <div class="bar">
-    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="president">President</button><button data-o="house">House</button><button data-o="results">Results</button><button data-o="measures">Measures</button><button data-o="states">States</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
+    <div class="tabs" role="group" aria-label="Offices"><button data-o="president">President</button><button data-o="senate">Senate</button><button data-o="house">House</button><button data-o="governor">Governor</button></div>
+    <div class="tabs" role="group" aria-label="Election 2026"><button data-o="results">Results</button><button data-o="early">Early vote</button><button data-o="measures">Measures</button></div>
+    <div class="tabs" role="group" aria-label="Background"><button data-o="states">States</button><button data-o="history">History</button></div>
     <select class="pill" id="year" aria-label="Election year" style="color:inherit" hidden></select>
     <select class="pill" id="day" aria-label="Show data from" style="color:inherit"><option value="">Live</option></select>
-    <div class="pill" id="control"></div>
   </div>
 
   <div class="card" id="flow" style="margin-bottom:16px"></div>
@@ -110,14 +113,12 @@ const PAST = { national: TURNOUT.national, pres: PRESIDENT.list, states: Object.
 const pct = p => p == null ? '—' : Math.round(p * 100) + '%';
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-let [office, hashYear] = location.hash.slice(1).split('/'); office ||= localStore('office') || 'governor'; let sel = null, sortKey = 'abs', sortDir = 1, geo;
+let [office, hashYear] = location.hash.slice(1).split('/'); office ||= localStore('office') || 'senate'; let sel = null, sortKey = 'abs', sortDir = 1, geo;
 
 function localStore(k, v) { try { return v === undefined ? localStorage.getItem(k) : localStorage.setItem(k, v); } catch { return null; } }
 
 document.getElementById('updated').textContent =
   `${saved ? 'Snapshot from' : 'Live as of'} ${new Date(D.updated).toLocaleString()} · consensus = average of ${D.governor.raters.length}–${D.senate.raters.length} forecasters + Polymarket odds`;
-document.getElementById('control').innerHTML = Object.entries(D.control).map(([ch, o]) =>
-  `${ch} control (Polymarket): ` + Object.entries(o).map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ')).join(' &nbsp;·&nbsp; ');
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   year = LIVE[b.dataset.o] ?? (b.dataset.o === 'states' ? CTRL_LATEST : HOUSE_LATEST); office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
 });
@@ -201,7 +202,7 @@ function render() {
 
 // ---- Results tab: election night, from results-data.js (written by `node results.js`) ----
 const R = window.RESULTS;
-const RKIND = { S: ['senate', 'Senate'], G: ['governor', 'Governor'], H: ['house', 'House'] };
+const RKIND = { S: ['senate', 'Senate'], H: ['house', 'House'], G: ['governor', 'Governor'] };
 let rkind = 'S';
 const rmodes = document.getElementById('rmodes');
 rmodes.innerHTML = Object.entries(RKIND).map(([k, [, l]]) => `<button data-r="${k}">${l}</button>`).join('');
@@ -432,31 +433,39 @@ const likely = r => !r.score ? r.incParty : r.score > 0 ? 'D' : 'R'; // ponytail
 const PARTY = { D: 'Democrats', R: 'Republicans' };
 const tag = p => `<b style="color:var(--${p.toLowerCase()})">${p}</b>`;
 
-function chamberLine(o) {
+const odds = o => Object.entries(o ?? {}).map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ');
+function chamberLine(o, full) {
+  const NAME = { governor: 'Governors', senate: 'Senate', house: 'House' }, market = { senate: D.control.Senate, house: D.control.House }[o];
+  const mk = market && Object.keys(market).length ? ` · Polymarket control: ${odds(market)}` : '';
+  if (!D[o]) return `<div><b>${NAME[o]}</b>${mk ? ` &nbsp;${mk.slice(3)}` : ' &nbsp;no data'}</div>`;
   const now = { ...NOT_UP[o] }, next = { ...NOT_UP[o] };
   for (const r of D[o].races) { if (r.incParty in now) now[r.incParty]++; if (likely(r) in next) next[likely(r)]++; } // vacant/new seats have no current party
   const lead = c => c.D > c.R ? 'D' : c.R > c.D || o === 'senate' ? 'R' : null; // a 50-50 Senate stays R on the VP's tiebreak
   const flips = D[o].races.filter(r => r.incParty in NOT_UP[o] && likely(r) !== r.incParty);
   const list = flips.map(r => `${esc(r.label)} ${tag(r.incParty)}→${tag(likely(r))}${Math.abs(r.score) < 0.5 ? ' <span class="sub">(tossup)</span>' : ''}`).join(', ');
   const who = c => lead(c) ? `${PARTY[lead(c)]} control` : 'Tied';
-  return `<div style="margin-bottom:8px"><b>${{ governor: 'Governors', senate: 'Senate', house: 'House' }[o]}</b> &nbsp;Now ${tag('D')} ${now.D} – ${tag('R')} ${now.R} (${who(now)}) → Likely ${tag('D')} ${next.D} – ${tag('R')} ${next.R} (${who(next)})
-    <div class="sub">${flips.length ? `${flips.length} likely flips: ${list}` : 'No likely flips'}</div></div>`;
+  const head = `<b>${NAME[o]}</b> &nbsp;Now ${tag('D')} ${now.D} – ${tag('R')} ${now.R} (${who(now)}) → Likely ${tag('D')} ${next.D} – ${tag('R')} ${next.R} (${who(next)})${mk}`;
+  if (!full) return `<div style="margin-bottom:4px">${head} <span class="sub">· ${flips.length} likely flips</span></div>`;
+  const body = flips.length ? `${flips.length} likely flips: ${list}` : 'No likely flips';
+  return `<div>${head}${flips.length > 10 ? `<details><summary>${flips.length} likely flips</summary><div class="sub">${list}</div></details>` : `<div class="sub">${body}</div>`}</div>`;
 }
 
-function presLine() {
+function presLine(full) {
   const P = D.president; if (!P) return '';
   const ev = { D: 0, R: 0 }; for (const r of P.races) ev[likely(r)] = (ev[likely(r)] ?? 0) + r.ev;
   const names = l => l.map(([n, p]) => `${esc(n)} ${pct(p)}`).join(', ');
-  return `<div style="margin-top:8px"><b>President 2028</b> &nbsp;Polymarket: ${Object.entries(P.party).map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ')} · electoral votes by state favorite: ${tag('D')} ${ev.D} – ${tag('R')} ${ev.R}
-    <div class="sub">Winner: ${names(P.winner)}</div><div class="sub">D nominee: ${names(P.dem)} · R nominee: ${names(P.rep)}</div></div>`;
+  const head = `<b>President 2028</b> &nbsp;Polymarket: ${odds(P.party)} · electoral votes by state favorite: ${tag('D')} ${ev.D} – ${tag('R')} ${ev.R}`;
+  return full ? `<div>${head}<div class="sub">Winner: ${names(P.winner)}</div><div class="sub">D nominee: ${names(P.dem)}</div><div class="sub">R nominee: ${names(P.rep)}</div></div>`
+    : `<div style="margin-bottom:4px">${head}</div>`;
 }
 
-function renderFlow() {
+function renderFlow() { // the 2026 outlook: just the open office on its own tab, a one-line-each overview elsewhere, hidden for past years
   const el = document.getElementById('flow');
-  const h = D.control.House?.['Democratic Party'];
-  el.innerHTML = `<div class="sub" style="margin-bottom:8px">Who holds power now, and who likely will after Election Day (favorite in each race, by consensus score)</div>
-    ${chamberLine('senate')}${chamberLine('governor')}
-    ${D.house ? chamberLine('house').replace('</div></div>', `${h == null ? '' : ` · Polymarket: ${pct(h)} Democrats take control`}</div></div>`) : `<div><b>House</b> &nbsp;Now Republicans control → ${h == null ? 'no market data' : `Polymarket: ${pct(h)} Democrats take control`}</div>`}${presLine()}`;
+  el.hidden = isPast() || office === 'states' || office === 'history';
+  if (el.hidden) return;
+  if (office === 'president') return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2028 outlook (markets only; forecasters haven't rated 2028 yet)</div>${presLine(true)}`;
+  if (office in NOT_UP) return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2026 outlook: who holds power now, and who's favored in each race (consensus of forecasters and Polymarket)</div>${chamberLine(office, true)}`;
+  el.innerHTML = `<div class="sub" style="margin-bottom:6px">2026 outlook</div>${chamberLine('senate')}${chamberLine('house')}${chamberLine('governor')}${presLine()}`;
 }
 
 // ---- History tab: 50 years of results and turnout (past/*.js) ----
@@ -656,7 +665,8 @@ function renderEarly() {
 }
 
 function renderTable() {
-  head([['label', office === 'president' ? 'State' : 'Race'], ['incumbent', office === 'president' ? '2024 result' : 'Incumbent'], ['flip', 'Held → likely'], ['abs', 'Consensus'], ['spread', 'Disagreement'], ['pD', 'Market P(D)'], [null, 'Market leader']],
+  const mk = races().some(r => r.market); // no district-level markets for the House
+  head([['label', office === 'president' ? 'State' : 'Race'], ['incumbent', office === 'president' ? '2024 result' : 'Incumbent'], ['flip', 'Held → likely'], ['abs', 'Consensus'], ['spread', 'Disagreement'], ...(mk ? [['pD', 'Polymarket P(D)'], [null, 'Polymarket leader']] : [])],
     'Sorted by closest race. "Disagreement" = how far apart the sources are (std. dev. on a −3…+3 scale).');
   const val = r => ({ abs: Math.abs(r.score ?? 9), pD: r.market?.pD ?? -1, flip: likely(r) === r.incParty ? 1 : 0 }[sortKey] ?? r[sortKey]);
   const rows = sorted(races(), val);
@@ -666,7 +676,7 @@ function renderTable() {
     <td>${!r.incParty ? `${tag(r.score > 0 ? 'D' : 'R')} favored <span class="sub">(open)</span>` : likely(r) === r.incParty ? `${tag(r.incParty)} hold` : `${tag(r.incParty)} → ${tag(likely(r))} <b>flip</b>`}</td>
     <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color(r.score)}"></span> ${cat(r.score)[1]}</td>
     <td>${r.spread >= 0.75 ? '<span class="warn">' + r.spread + '</span>' : r.spread}</td>
-    <td>${pct(r.market?.pD)}</td><td>${esc(r.market?.leader ?? '—')} ${r.market ? pct(r.market.leaderP) : ''}</td></tr>`).join('');
+    ${mk ? `<td>${pct(r.market?.pD)}</td><td>${esc(r.market?.leader ?? '—')} ${r.market ? pct(r.market.leaderP) : ''}</td>` : ''}</tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
 }
 </script>

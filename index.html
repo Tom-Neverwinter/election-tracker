@@ -44,7 +44,7 @@
   <div class="sub" id="updated"></div>
 
   <div class="bar">
-    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="president">President</button><button data-o="house">House</button><button data-o="results">Results</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
+    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="president">President</button><button data-o="house">House</button><button data-o="results">Results</button><button data-o="measures">Measures</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
     <select class="pill" id="year" aria-label="Election year" style="color:inherit" hidden></select>
     <select class="pill" id="day" aria-label="Show data from" style="color:inherit"><option value="">Live</option></select>
     <div class="pill" id="control"></div>
@@ -81,6 +81,7 @@
 <script src="past/turnout.js"></script>
 <script src="past/house.js"></script>
 <script src="results-data.js"></script>
+<script src="measures.js"></script>
 <script type="module">
 // ---- live data is fetched fresh on open, unless ?day=YYYY-MM-DD picks a saved snapshot ----
 const status = t => document.getElementById('updated').textContent = t;
@@ -164,7 +165,7 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
   geo = topojson.feature(us, us.objects.states).features;
   d3.select('#map').append('g').selectAll('path').data(geo).join('path')
     .attr('class', 'st').attr('d', d3.geoPath())
-    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'results' ? (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'measures' ? MEAS.some(m => m.state === f.properties.name) : office === 'results' ? (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
     .append('title');
   render();
 });
@@ -179,6 +180,7 @@ function render() {
   if (office === 'early') return renderEarly();
   if (office === 'history') return renderHistory();
   if (office === 'results') return renderResults();
+  if (office === 'measures') return renderMeasures();
   if (isPast()) return renderPast();
   document.getElementById('legend').innerHTML = CATS.map(c => `<span><i style="background:${c[2]}"></i>${c[1]}</span>`).join('') +
     `<span><i style="background:var(--none)"></i>No race</span>`;
@@ -244,6 +246,32 @@ function renderResults() {
     <td>${Math.round(r.in)}%</td><td>${esc(r.lead) || '—'}${r.lead ? ` <span class="sub">${esc(rParty(rLead(r).party))}</span>` : ''}</td><td>${r.lead ? r.margin.toFixed(1) : '—'}</td><td>${r.called ? `<b>${esc(r.status)}</b>` : r.status}</td><td>${r.fc ? cat(r.fc.score)[1] : '—'}</td></tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   document.getElementById('srcs').innerHTML = 'Sources: <a href="https://www.nbcnews.com/politics/2026-elections">NBC News</a> election results (vote data from the Associated Press), pulled by results.js.';
+}
+
+// ---- Measures tab: 2026 statewide ballot measures (measures.js), with NBC results where results.js found them ----
+const MEAS = window.MEASURES ?? [];
+const measColor = d3.scaleSequential([-4, 14], d3.interpolatePurples).clamp(true); // start below 0 so 1-measure states aren't near-white
+const propResults = st => (R?.races ?? []).filter(r => r.state === st && !RKIND[r.office]); // anything that isn't Senate/Governor/House
+function renderMeasures() {
+  const g = d3.group(MEAS, m => m.state), el = document.getElementById('detail');
+  document.getElementById('legend').innerHTML = [1, 3, 6, 10, 14].map(v => `<span><i style="background:${measColor(v)}"></i>${v}${v === 14 ? '+' : ''}</span>`).join('') + '<span><i style="background:var(--none)"></i>None</span> <span>statewide measures on the ballot</span>';
+  d3.selectAll('path.st').attr('fill', f => g.has(f.properties.name) ? measColor(g.get(f.properties.name).length) : 'var(--none)').classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => `${f.properties.name}: ${g.get(f.properties.name)?.length ?? 0} measures`);
+  const topics = d3.rollups(MEAS, v => v.length, m => m.topic).sort((a, b) => b[1] - a[1]);
+  document.getElementById('seats').innerHTML = '';
+  const res = r => { const y = r.cands.find(c => /^yes/i.test(c.name)), n = r.cands.find(c => /^no/i.test(c.name));
+    return `${esc(r.name)}: ${y ? `Yes ${y.pct}%` : ''}${n ? ` · No ${n.pct}%` : ''} · ${Math.round(r.pctIn ?? 0)}% in${r.called ? ` · <b>${esc(r.winner ?? 'called')}</b>` : ''}`; };
+  const mine = sel && g.get(sel);
+  if (mine) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(sel)}: ${mine.length} measure${mine.length > 1 ? 's' : ''}</h2>` +
+    mine.map(m => `<div style="margin-top:10px"><b>${esc(m.name)}</b> <span class="pill" style="padding:1px 6px;font-size:11px">${esc(m.topic)}</span><div class="sub">${esc(m.summary)} <a href="${esc(m.source)}" target="_blank" rel="noopener">source</a></div></div>`).join('') +
+    (propResults(sel).length ? `<div style="margin-top:12px"><b>Results</b>${propResults(sel).map(r => `<div class="sub">${res(r)}</div>`).join('')}</div>` : '');
+  else el.innerHTML = `<h2 style="margin:0;font-size:18px">2026 ballot measures</h2><div class="sub">${MEAS.length} statewide measures in ${g.size} states</div>
+    <div style="margin:8px 0">${topics.map(([t, n]) => `${esc(t)} ${n}`).join(' · ')}</div><p class="sub">Click a state for its measures. Results appear on election night once results.js has run.</p>`;
+  head([['state', 'State'], ['name', 'Measure'], ['topic', 'Topic'], [null, 'What a yes vote does']], 'Every statewide measure on the Nov 3 ballot. Click a column to sort.');
+  const tb = document.getElementById('rows');
+  tb.innerHTML = sorted(MEAS, m => sortKey === 'abs' ? m.state + m.name : m[sortKey] ?? '').map(m => `<tr data-s="${esc(m.state)}"><td><b>${esc(m.state)}</b></td><td>${esc(m.name)}</td><td>${esc(m.topic)}</td><td class="sub">${esc(m.summary)}</td></tr>`).join('');
+  tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  document.getElementById('srcs').innerHTML = 'Sources: Wikipedia, <a href="https://en.wikipedia.org/wiki/2026_United_States_ballot_measures">2026 United States ballot measures</a> and each measure\'s page; summaries written for this site. Ballotpedia counts 145 measures; one is missing here.';
 }
 
 // ---- Past years on the Governor / Senate / President tabs (past/*.js) ----
@@ -530,7 +558,7 @@ function head(cols, note) { // cols: [key|null, label]
   const tr = document.getElementById('thead');
   tr.innerHTML = cols.map(([k, l]) => `<th${k ? ` data-k="${k}"` : ''}>${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
   tr.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
-    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory }[office] ?? renderTable)();
+    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory, results: renderResults, measures: renderMeasures }[office] ?? renderTable)();
   });
 }
 const sorted = (rows, val) => [...rows].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sortDir);

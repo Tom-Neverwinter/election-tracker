@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>2026 Election Tracker</title>
+<title>Election Tracker</title>
 <style>
   :root { --bg:#f7f7f5; --card:#fff; --ink:#1b1b1b; --mute:#6b6b6b; --line:#e2e2de; --none:#d9d9d4; --d:#2b6cb0; --r:#c53030; --s1:#1f7a4d; --s2:#b45309; }
   @media (prefers-color-scheme: dark) { :root { --bg:#141414; --card:#1e1e1e; --ink:#eee; --mute:#9a9a9a; --line:#333; --none:#3a3a3a; --d:#63a4ff; --r:#ff6b6b; --s1:#38a56f; --s2:#b97f26; } }
@@ -40,11 +40,11 @@
 </head>
 <body>
 <main>
-  <h1>2026 Election Tracker</h1>
+  <h1>Election Tracker</h1>
   <div class="sub" id="updated"></div>
 
   <div class="bar">
-    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
+    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="president">President 2028</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
     <select class="pill" id="day" aria-label="Show data from" style="color:inherit"><option value="">Live</option></select>
     <div class="pill" id="control"></div>
   </div>
@@ -113,6 +113,14 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
 });
 if (!D.early) document.querySelector('[data-o=early]').remove();
 if (office === 'early' && !D.early) office = 'governor';
+if (!D.president) document.querySelector('[data-o=president]').remove();
+if (office === 'president' && !D.president) office = 'governor';
+for (const r of D.president?.races ?? []) { // 2024 result is the "held by" baseline, and the fallback where no market exists yet
+  const p = window.PAST?.states[r.state]?.p?.[2024];
+  if (!p) continue;
+  r.incParty = p[2]; r.incumbent = `2024: D ${p[0]} · R ${p[1]}`;
+  if (r.score == null) { r.score = Math.round(Math.max(-3, Math.min(3, (p[0] - p[1]) / 5)) * 100) / 100; r.note = 'no market yet, 2024 margin'; } // ponytail: 15+ pt margin = Safe
+}
 if (office === 'early') { sortKey = 'per'; sortDir = -1; }
 if (office === 'history') { sortKey = 't22'; sortDir = -1; }
 
@@ -171,7 +179,7 @@ function render() {
       return rs ? rs.map(r => `${r.label}: ${cat(r.score)[1]}${r.market?.pD != null ? ` · market D ${pct(r.market.pD)}` : ''}`).join('\n') : `${f.properties.name}: no race`;
     });
   renderSeats(); renderDetail(); renderTable();
-  document.getElementById('srcs').innerHTML = `Sources: <a href="${D[office].wiki}">Wikipedia's ${office} ratings table</a> (${D[office].raters.map(esc).join(', ')}) and <a href="https://polymarket.com">Polymarket</a>.`;
+  document.getElementById('srcs').innerHTML = office === 'president' ? `Sources: <a href="https://polymarket.com">Polymarket</a> state and national 2028 markets (thin: a few thousand dollars traded per state); where a state has no market, its 2024 margin from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>. <a href="${D.president.wiki}">Wikipedia: 2028 election</a>.` : `Sources: <a href="${D[office].wiki}">Wikipedia's ${office} ratings table</a> (${D[office].raters.map(esc).join(', ')}) and <a href="https://polymarket.com">Polymarket</a>.`;
 }
 
 // Seats not on the ballot in 2026. Senate D includes the 2 independents who caucus with Democrats (King, Sanders).
@@ -191,13 +199,21 @@ function chamberLine(o) {
     <div class="sub">${flips.length ? `${flips.length} likely flips: ${list}` : 'No likely flips'}</div></div>`;
 }
 
+function presLine() {
+  const P = D.president; if (!P) return '';
+  const ev = { D: 0, R: 0 }; for (const r of P.races) ev[likely(r)] = (ev[likely(r)] ?? 0) + r.ev;
+  const names = l => l.map(([n, p]) => `${esc(n)} ${pct(p)}`).join(', ');
+  return `<div style="margin-top:8px"><b>President 2028</b> &nbsp;Polymarket: ${Object.entries(P.party).map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ')} · electoral votes by state favorite: ${tag('D')} ${ev.D} – ${tag('R')} ${ev.R}
+    <div class="sub">Winner: ${names(P.winner)}</div><div class="sub">D nominee: ${names(P.dem)} · R nominee: ${names(P.rep)}</div></div>`;
+}
+
 function renderFlow() {
   const el = document.getElementById('flow');
   const h = D.control.House?.['Democratic Party'];
   el.innerHTML = `<div class="sub" style="margin-bottom:8px">Who holds power now, and who likely will after Election Day (favorite in each race, by consensus score)</div>
     ${chamberLine('senate')}${chamberLine('governor')}
     <div><b>House</b> &nbsp;Now Republicans control → ${h == null ? 'no market data' : `Polymarket: ${pct(h)} Democrats take control`}
-    <div class="sub">No seat-by-seat data for the House here, so this is market odds only.</div></div>`;
+    <div class="sub">No seat-by-seat data for the House here, so this is market odds only.</div></div>${presLine()}`;
 }
 
 // ---- History tab: 50 years of results and turnout (past.js) ----
@@ -312,7 +328,7 @@ function renderHistory() {
 }
 
 function renderSeats() {
-  const counts = CATS.map(c => [c, races().filter(r => r.score != null && cat(r.score) === c).length]);
+  const counts = CATS.map(c => [c, d3.sum(races().filter(r => r.score != null && cat(r.score) === c), r => r.ev ?? 1)]); // president: weighted by electoral votes
   document.getElementById('seats').innerHTML = counts.filter(([, n]) => n).map(([c, n]) =>
     `<div style="flex:${n};background:${c[2]}" title="${c[1]}: ${n}">${n}</div>`).join('');
 }
@@ -323,8 +339,8 @@ function renderDetail() {
   if (!rs) { el.innerHTML = '<div class="sub">Click a state (or a table row) for every source\'s rating.</div>'; return; }
   el.innerHTML = rs.map(r => {
     const m = r.market;
-    return `<h2 style="margin:0;font-size:18px">${esc(r.label)} ${office === 'governor' ? 'Governor' : 'Senate'}</h2>
-      <div class="sub">Incumbent: ${esc(r.incumbent) || '—'} (${esc(r.incParty)})${r.note ? ' · ' + esc(r.note) : ''} · PVI ${esc(r.pvi)}</div>
+    return `<h2 style="margin:0;font-size:18px">${esc(r.label)} ${{ governor: 'Governor', senate: 'Senate', president: `President 2028 · ${r.ev} electoral votes` }[office]}</h2>
+      <div class="sub">${office === 'president' ? esc(r.incumbent) || 'No 2024 result' : `Incumbent: ${esc(r.incumbent) || '—'} (${esc(r.incParty)}) · PVI ${esc(r.pvi)}`}${r.note ? ' · ' + esc(r.note) : ''}</div>
       <div style="margin:10px 0 2px;font-size:20px;font-weight:600;color:${color(r.score)}">${cat(r.score)[1]} <span class="sub">(${r.score > 0 ? '+' : ''}${r.score})</span></div>
       ${r.spread >= 0.75 ? '<div class="warn">⚠ Sources disagree on this one</div>' : ''}
       <div class="chips">${r.sources.map(s => `<div class="chip" style="background:${color(s.score)};color:${Math.abs(s.score) >= 1.5 ? '#fff' : '#111'}"><span>${esc(s.name)}</span><b>${esc(s.rating)}</b></div>`).join('')}</div>
@@ -347,7 +363,7 @@ function renderEarly() {
   document.querySelectorAll('#modes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === mode));
   const E = D.early, states = E.states;
   const total = d3.sum(states, s => s.cast), t22 = d3.sum(states, s => s.turnout22);
-  const nat = E.dates.map((_, i) => d3.sum(states.filter(s => s.series), s => s.series[i])); // hand-entered states have no daily series
+  const nat = E.dates.map((_, i) => d3.sum(states.filter(s => s.series), s => s.series[i])); // hand-entered states: feed lifted by news-report points
   const allPop = d3.sum(Object.values(POP), p => p[0]), allElig = d3.sum(Object.values(POP), p => p[1]), repElig = d3.sum(states, elig);
   const turnoutBar = v => `<div class="seats" title="share of eligible voters"><div style="flex:${v};background:#38a169;color:#fff">Voted ${pct1(v)}</div><div style="flex:${1 - v};background:var(--none);color:var(--ink)">Not yet ${pct1(1 - v)}</div></div>`;
   const ps = states.filter(s => s.dem != null), pt = d3.sum(ps, s => s.dem + s.rep + s.other);
@@ -366,7 +382,7 @@ function renderEarly() {
       ${turnoutBar(total / repElig)}
       <div class="sub">${fmt(Math.round(total / repElig * 1e5))} ballots per 100,000 eligible voters</div>
       <div class="sub">"Not yet" includes people who will vote by Election Day as well as those who won't vote at all.</div>
-      ${spark(nat)}<div class="sub">Cumulative ballots in feed states, ${E.dates[0]} → ${E.asOf}</div>
+      ${spark(nat)}<div class="sub">Cumulative ballots (feed plus news-report points), ${E.dates[0]} → ${E.asOf}</div>
       <div style="margin-top:10px" class="sub">Party registration of early voters, ${ps.length} states that report it:</div>${partyLine(d3.sum(ps, s => s.dem), d3.sum(ps, s => s.rep), d3.sum(ps, s => s.other), pt)}
       <p class="sub">Registration ≠ vote choice, and early voters skew differently than Election Day voters: mail leans D, early in-person leaned R in 2024. Compare a state to its own history, not to 50/50. Click a state for details.</p>`
     : `<h2 style="margin:0;font-size:18px">${esc(s.state_name)}</h2>
@@ -374,7 +390,7 @@ function renderEarly() {
       <div style="margin-top:8px" class="sub">Population ${fmt(pop(s))} · ${fmt(elig(s))} eligible voters</div>
       ${turnoutBar(voted(s))}
       <div class="sub">${fmt(per(s))} ballots per 100,000 eligible voters · ${fmt(perPop(s))} per 100,000 residents</div>
-      ${s.note ? `<div class="warn">Hand-entered: ${esc(s.note)}<br>Feed count ${fmt(feed(s))} → corrected ${fmt(s.cast)} (+${fmt(s.cast - feed(s))})${s.series ? '. Trend line shows the feed only.' : ''}</div>` : ''}
+      ${s.note ? `<div class="warn">Hand-entered: ${esc(s.note)}<br>Feed count ${fmt(feed(s))} → corrected ${fmt(s.cast)} (+${fmt(s.cast - feed(s))}). Trend line: feed, lifted to news-report totals where they're higher.</div>` : ''}
       ${s.flag ? `<div class="warn">⚠ ${esc(s.flag)}</div>` : ''}
       ${s.series ? spark(s.series) : ''}
       <div class="sub">Mail returned ${num(s.returned)} of ${num(s.requested)} requested · in-person early ${num(s.inperson)}</div>
@@ -396,13 +412,13 @@ function renderEarly() {
 }
 
 function renderTable() {
-  head([['label', 'Race'], ['incumbent', 'Incumbent'], ['flip', 'Held → likely'], ['abs', 'Consensus'], ['spread', 'Disagreement'], ['pD', 'Market P(D)'], [null, 'Market leader']],
+  head([['label', office === 'president' ? 'State' : 'Race'], ['incumbent', office === 'president' ? '2024 result' : 'Incumbent'], ['flip', 'Held → likely'], ['abs', 'Consensus'], ['spread', 'Disagreement'], ['pD', 'Market P(D)'], [null, 'Market leader']],
     'Sorted by closest race. "Disagreement" = how far apart the sources are (std. dev. on a −3…+3 scale).');
   const val = r => ({ abs: Math.abs(r.score ?? 9), pD: r.market?.pD ?? -1, flip: likely(r) === r.incParty ? 1 : 0 }[sortKey] ?? r[sortKey]);
   const rows = sorted(races(), val);
   const tb = document.getElementById('rows');
   tb.innerHTML = rows.map(r => `<tr data-s="${esc(r.state)}">
-    <td><b>${esc(r.label)}</b></td><td>${esc(r.incumbent)} (${esc(r.incParty)})${r.note ? ` <span class="sub">${esc(r.note)}</span>` : ''}</td>
+    <td><b>${esc(r.label)}</b>${r.ev ? ` <span class="sub">${r.ev}</span>` : ''}</td><td>${esc(r.incumbent)} (${esc(r.incParty)})${r.note ? ` <span class="sub">${esc(r.note)}</span>` : ''}</td>
     <td>${likely(r) === r.incParty ? `${tag(r.incParty)} hold` : `${tag(r.incParty)} → ${tag(likely(r))} <b>flip</b>`}</td>
     <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color(r.score)}"></span> ${cat(r.score)[1]}</td>
     <td>${r.spread >= 0.75 ? '<span class="warn">' + r.spread + '</span>' : r.spread}</td>

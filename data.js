@@ -121,6 +121,10 @@ const MANUAL = [
   { state_po: 'SD', state_name: 'South Dakota', date: '2026-11-02', cast: 77795, requested: 83453, returned: null, inperson: null, source: NBC('south-dakota'), note: 'NBC/TargetSmart; feed stopped at Oct 31' },
   { state_po: 'WA', state_name: 'Washington', date: '2026-11-02', cast: 1834247, returned: null, inperson: null, source: NBC('washington'), note: 'NBC/TargetSmart; feed stopped at Oct 30' },
   { state_po: 'WV', state_name: 'West Virginia', date: '2026-11-02', cast: 169350, requested: 9735, returned: null, inperson: null, source: NBC('west-virginia'), note: 'NBC/TargetSmart; feed stopped at Oct 29' },
+  // 2026-11-02 night: NBC loaded for ME; CA and LA feeds current but well behind NBC.
+  { state_po: 'ME', state_name: 'Maine', date: '2026-11-02', cast: 302409, requested: 322811, returned: null, inperson: null, source: NBC('maine'), note: 'NBC/TargetSmart; feed stopped at Oct 30' },
+  { state_po: 'CA', state_name: 'California', date: '2026-11-02', cast: 6405535, returned: null, inperson: null, source: NBC('california'), note: 'NBC/TargetSmart; feed lower (5,965,896)' },
+  { state_po: 'LA', state_name: 'Louisiana', date: '2026-11-02', cast: 579714, returned: null, inperson: null, source: NBC('louisiana'), note: 'NBC/TargetSmart; feed lower (530,514)' },
 ];
 // Counts that look wrong but have no confirmed replacement: shown as reported, with a warning.
 const FLAGS = {

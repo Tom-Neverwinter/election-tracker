@@ -18,6 +18,7 @@ const day = now.toLocaleDateString('en-CA');
 fs.mkdirSync(path.join(dir, 'hourly'), { recursive: true });
 fs.writeFileSync(path.join(dir, 'hourly', stamp + '.json'), JSON.stringify({ captured: now.toISOString(), data: history?.[day] ?? null, results: load('results-data.js', 'window.RESULTS = ') }));
 
+try { require('./hourly-index.js').build(); } catch (e) { log('index failed: ' + e.message); }
 run('git', ['add', 'history.js', 'results-data.js', 'hourly']);
 if (require('child_process').spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: dir }).status === 1) { // 1 = something staged
   run('git', ['commit', '-q', '-m', `hourly ${stamp}`]);

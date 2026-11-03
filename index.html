@@ -346,7 +346,9 @@ const ALIAS = { 'Democrat-Republican': 'Democratic-Republican', 'Anti-Administra
   'Constitutional Unionist': 'Constitutional Union', 'Unconditional Unionist': 'Constitutional Union', Unionist: 'Constitutional Union', Union: 'Constitutional Union', 'States Rights': "States' Rights" };
 const ordinal = n => n + ([, 'st', 'nd', 'rd'][n % 100 >> 3 ^ 1 && n % 10] || 'th');
 const partyColor = p => PARTY_COLOR[p] ?? PARTY_COLOR[ALIAS[p]] ?? d3.schemeTableau10[[...String(p)].reduce((h, c) => h * 31 + c.charCodeAt(0) >>> 0, 7) % 10];
-const SHORT = { D: 'Democratic', R: 'Republican', I: 'Independent', O: 'Independent' };
+const SHORT = { D: 'Democratic', R: 'Republican', I: 'Independent', O: 'Independent', DR: 'Democratic-Republican', F: 'Federalist', W: 'Whig', U: 'Constitutional Union',
+  NR: 'National Republican', KN: 'Know Nothing', PO: 'Populist', AM: 'Anti-Masonic', P: 'Progressive', FL: 'Farmer-Labor', SV: 'Silver', LO: 'Law and Order', OP: 'Opposition',
+  LR: 'Liberal Republican', RA: 'Readjuster', G: 'Greenback', PR: 'Prohibition' }; // governor codes before 1976
 function pastRows() { // one row per contest that year: {state, label, d, r, party, winner, margin}
   const yi = PRESIDENT.years.indexOf(year), rows = [];
   if (seatSrc()) return Object.entries(seatSrc().states).filter(([, y]) => y[year]).map(([st, y]) => {
@@ -416,7 +418,7 @@ function renderPast() {
     return;
   }
   head([['label', 'State'], ['party', 'Won by'], ...(office === 'president' ? [] : [['winner', 'Winner']]), ['d', 'D %'], ['r', 'R %'], ['margin', 'Margin']],
-    byMargin ? (office === 'president' && year < 1976 ? 'Sorted by closest race. Margin = winner minus runner-up (D + / R +); other parties in their own color.' : 'Sorted by closest race. Margin = D % minus R %.') : office === 'president' && year >= 1824 ? 'Party that carried each state; shading by margin where Democrats and Republicans were the top two.' : 'Party that carried each state. State popular votes start in 1824.');
+    byMargin ? (office === 'president' && year < 1976 ? 'Sorted by closest race. Margin = winner minus runner-up (D + / R +); other parties in their own color.' : 'Sorted by closest race. Margin = D % minus R %.') : office === 'president' && year >= 1824 ? 'Party that carried each state; shading by margin where Democrats and Republicans were the top two.' : office === 'president' ? 'Party that carried each state. State popular votes start in 1824.' : 'Party that won each race; D/R vote shares where the source has them.');
   const val = r => sortKey === 'margin' ? Math.abs(r.margin ?? 999) : r[sortKey] ?? '';
   const tb = document.getElementById('rows');
   tb.innerHTML = sorted(rows, val).map(r => `<tr data-s="${esc(r.state)}"><td><b>${esc(r.label)}</b></td><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rowColor(r)}"></span> ${esc(r.party)}</td>
@@ -424,7 +426,7 @@ function renderPast() {
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   document.getElementById('srcs').innerHTML = office === 'president'
     ? 'Sources: state results 1976–2024 from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>; popular-vote shares 1824–1972 from each election\'s Wikipedia page; which party carried each state from <a href="https://en.wikipedia.org/wiki/List_of_United_States_presidential_election_results_by_state">Wikipedia</a>; national totals from Wikipedia\'s yearly election pages.'
-    : `Sources: ${office === 'senate' ? '<a href="https://electionlab.mit.edu/data">MIT Election Lab</a>. Before 1976 the Senate tab shows seat holdings from <a href="https://voteview.com/data">Voteview</a>.' : "Wikipedia's yearly gubernatorial election tables. History here starts in 1976."}`;
+    : `Sources: ${office === 'senate' ? '<a href="https://electionlab.mit.edu/data">MIT Election Lab</a>. Before 1976 the Senate tab shows seat holdings from <a href="https://voteview.com/data">Voteview</a>.' : "Wikipedia's yearly gubernatorial election tables (1976 on) and each earlier election's own page, back to 1776. Early governors were often chosen by legislatures, so only the winner is shown."}`;
 }
 
 // Seats not on the ballot in 2026. Senate D includes the 2 independents who caucus with Democrats (King, Sanders).

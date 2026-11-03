@@ -44,7 +44,7 @@
   <div class="sub" id="updated"></div>
 
   <div class="bar">
-    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="president">President</button><button data-o="house">House</button><button data-o="results">Results</button><button data-o="measures">Measures</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
+    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="president">President</button><button data-o="house">House</button><button data-o="results">Results</button><button data-o="measures">Measures</button><button data-o="states">States</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
     <select class="pill" id="year" aria-label="Election year" style="color:inherit" hidden></select>
     <select class="pill" id="day" aria-label="Show data from" style="color:inherit"><option value="">Live</option></select>
     <div class="pill" id="control"></div>
@@ -80,6 +80,7 @@
 <script src="past/governor.js"></script>
 <script src="past/turnout.js"></script>
 <script src="past/house.js"></script>
+<script src="past/control.js"></script>
 <script src="results-data.js"></script>
 <script src="measures.js"></script>
 <script type="module">
@@ -118,7 +119,7 @@ document.getElementById('updated').textContent =
 document.getElementById('control').innerHTML = Object.entries(D.control).map(([ch, o]) =>
   `${ch} control (Polymarket): ` + Object.entries(o).map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ')).join(' &nbsp;·&nbsp; ');
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
-  year = LIVE[b.dataset.o] ?? HOUSE_LATEST; office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
+  year = LIVE[b.dataset.o] ?? (b.dataset.o === 'states' ? CTRL_LATEST : HOUSE_LATEST); office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
 });
 if (!D.early) document.querySelector('[data-o=early]').remove();
 if (office === 'early' && !D.early) office = 'governor';
@@ -165,7 +166,7 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
   geo = topojson.feature(us, us.objects.states).features;
   d3.select('#map').append('g').selectAll('path').data(geo).join('path')
     .attr('class', 'st').attr('d', d3.geoPath())
-    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'measures' ? MEAS.some(m => m.state === f.properties.name) : office === 'results' ? (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? MEAS.some(m => m.state === f.properties.name) : office === 'results' ? (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
     .append('title');
   render();
 });
@@ -181,6 +182,7 @@ function render() {
   if (office === 'history') return renderHistory();
   if (office === 'results') return renderResults();
   if (office === 'measures') return renderMeasures();
+  if (office === 'states') return renderStates();
   if (isPast()) return renderPast();
   document.getElementById('legend').innerHTML = CATS.map(c => `<span><i style="background:${c[2]}"></i>${c[1]}</span>`).join('') +
     `<span><i style="background:var(--none)"></i>No race</span>`;
@@ -274,13 +276,47 @@ function renderMeasures() {
   document.getElementById('srcs').innerHTML = 'Sources: Wikipedia, <a href="https://en.wikipedia.org/wiki/2026_United_States_ballot_measures">2026 United States ballot measures</a> and each measure\'s page; summaries written for this site. Ballotpedia counts 145 measures; one is missing here.';
 }
 
+// ---- States tab: who controls each state government (past/control.js) ----
+const CTRL = window.CONTROL ?? {};
+const CTRL_LATEST = Math.max(...Object.values(CTRL).flatMap(s => Object.keys(s).map(Number)));
+const ctrlYears = () => [...new Set(Object.values(CTRL).flatMap(s => Object.keys(s).map(Number)))].sort((a, b) => b - a);
+function ctrlStatus([gov, up, lo]) { // trifecta = one party holds the governorship and both chambers
+  if (gov && gov === up && up === lo) return { key: 'tri', party: gov, label: `${gov} trifecta` };
+  if (up === 'Nonpartisan') return { key: 'np', party: gov, label: 'Nonpartisan legislature' };
+  return { key: 'div', party: gov, label: gov ? `Divided (${gov} governor)` : 'Divided / unknown' };
+}
+const ctrlColor = st => st.key === 'np' ? '#b9a7d6' : st.key === 'tri' ? (st.party === 'Democratic' ? '#1c4e8f' : st.party === 'Republican' ? '#a02626' : partyColor(st.party))
+  : st.party === 'Democratic' ? '#9ec3ea' : st.party === 'Republican' ? '#f0a8a8' : '#9a9a9a';
+function renderStates() {
+  const rows = Object.entries(CTRL).filter(([, y]) => y[year]).map(([state, y]) => { const v = y[year], st = ctrlStatus(v); return { state, gov: v[0], up: v[1], lo: v[2], st, status: st.label }; });
+  const g = new Map(rows.map(r => [r.state, r])), el = document.getElementById('detail');
+  const tally = d3.rollups(rows, v => v.length, r => r.status).sort((a, b) => b[1] - a[1]);
+  const colorOf = l => ctrlColor(rows.find(r => r.status === l).st);
+  document.getElementById('legend').innerHTML = tally.map(([l]) => `<span><i style="background:${colorOf(l)}"></i>${esc(l)}</span>`).join('') + '<span><i style="background:var(--none)"></i>Not a state / no data</span>';
+  d3.selectAll('path.st').attr('fill', f => g.has(f.properties.name) ? ctrlColor(g.get(f.properties.name).st) : 'var(--none)').classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => { const r = g.get(f.properties.name); return r ? `${r.state} ${year}: governor ${r.gov ?? '?'} · upper ${r.up ?? '?'} · lower ${r.lo ?? '?'}` : f.properties.name; });
+  document.getElementById('seats').innerHTML = tally.map(([l, n]) => `<div style="flex:${n};background:${colorOf(l)};color:#fff" title="${esc(l)}: ${n}">${n}</div>`).join('');
+  const r = sel && g.get(sel);
+  const cell = p => p ? `<b style="color:${partyColor(p)}">${esc(p)}</b>` : '<span class="sub">unknown / none</span>';
+  if (r) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(r.state)} · ${year}</h2><div style="margin:8px 0;font-size:18px;color:${ctrlColor(r.st)}">${esc(r.status)}</div>
+    <div>Governor: ${cell(r.gov)}</div><div>Upper chamber: ${cell(r.up)}</div><div>Lower chamber: ${cell(r.lo)}</div>
+    <div class="sub" style="margin-top:8px">Trifectas over time: ${Object.entries(CTRL[r.state]).filter(([, v]) => ctrlStatus(v).key === 'tri').length} of ${Object.keys(CTRL[r.state]).length} years listed.</div>`;
+  else el.innerHTML = `<h2 style="margin:0;font-size:18px">State government control, ${year}</h2><div class="sub">${rows.length} states with data</div>
+    <div style="margin:8px 0">${tally.map(([l, n]) => `${esc(l)} ${n}`).join(' · ')}</div><p class="sub">A trifecta is one party holding the governorship and both legislative chambers. Click a state for details.</p>`;
+  head([['state', 'State'], ['status', 'Control'], ['gov', 'Governor'], ['up', 'Upper chamber'], ['lo', 'Lower chamber']], 'Majority party in each chamber, by seats; "Split" = tied.');
+  const tb = document.getElementById('rows');
+  tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? x.state : x[sortKey] ?? '').map(x => `<tr data-s="${esc(x.state)}"><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${ctrlColor(x.st)}"></span> <b>${esc(x.state)}</b></td><td>${esc(x.status)}</td><td>${cell(x.gov)}</td><td>${cell(x.up)}</td><td>${cell(x.lo)}</td></tr>`).join('');
+  tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  document.getElementById('srcs').innerHTML = 'Sources: Wikipedia\'s "Political party strength in &lt;State&gt;" tables (e.g. <a href="https://en.wikipedia.org/wiki/Political_party_strength_in_Texas">Texas</a>).';
+}
+
 // ---- Past years on the Governor / Senate / President tabs (past/*.js) ----
 const LIVE = { governor: 2026, senate: 2026, president: 2028, ...(D.house ? { house: 2026 } : {}) }; // old snapshots have no House forecast
 const HOUSE_LATEST = Math.max(...Object.keys(HOUSE.national).map(Number)); // House has no forecast here, only past delegations
-let year = +hashYear || LIVE[office] || HOUSE_LATEST; // #president/1860 opens a past year
+let year = +hashYear || LIVE[office] || (office === 'states' ? Math.max(...Object.values(window.CONTROL ?? {}).flatMap(s => Object.keys(s).map(Number))) : HOUSE_LATEST); // #president/1860 opens a past year
 const isPast = () => office === 'house' && !LIVE.house || office in LIVE && year !== LIVE[office];
 if (isPast()) sortKey = 'margin';
-const pastYears = o => o === 'house' ? Object.keys(HOUSE.national).map(Number).reverse() : o === 'president' ? [...PRESIDENT.years].reverse()
+const pastYears = o => o === 'states' ? ctrlYears() : o === 'house' ? Object.keys(HOUSE.national).map(Number).reverse() : o === 'president' ? [...PRESIDENT.years].reverse()
   : [...new Set([...Object.values(o === 'senate' ? SENATE : GOVERNOR).flatMap(x => Object.keys(x).map(y => parseInt(y))),
       ...(o === 'senate' ? Object.keys(SENATE_SEATS.national).map(Number).filter(y => y < 1976) : [])])].sort((a, b) => b - a);
 // Seat-holding view: the House always; the Senate before 1976 (no popular-vote results here before then)
@@ -289,7 +325,7 @@ const chamber = () => office === 'house' ? 'House' : 'Senate';
 const yearSel = document.getElementById('year');
 yearSel.onchange = () => { year = +yearSel.value; sel = null; sortKey = isPast() ? 'margin' : 'abs'; sortDir = 1; render(); };
 function yearPicker() {
-  yearSel.hidden = !(office in LIVE || office === 'house');
+  yearSel.hidden = !(office in LIVE || office === 'house' || office === 'states');
   if (yearSel.hidden) return;
   if (yearSel.dataset.o !== office) {
     yearSel.dataset.o = office;
@@ -558,7 +594,7 @@ function head(cols, note) { // cols: [key|null, label]
   const tr = document.getElementById('thead');
   tr.innerHTML = cols.map(([k, l]) => `<th${k ? ` data-k="${k}"` : ''}>${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
   tr.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
-    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory, results: renderResults, measures: renderMeasures }[office] ?? renderTable)();
+    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory, results: renderResults, measures: renderMeasures, states: renderStates }[office] ?? renderTable)();
   });
 }
 const sorted = (rows, val) => [...rows].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sortDir);

@@ -180,10 +180,11 @@ function render() {
     `<span><i style="background:var(--none)"></i>No race</span>`;
   const g = byState();
   d3.selectAll('path.st')
-    .attr('fill', f => color(g.get(f.properties.name)?.[0].score))
+    .attr('fill', f => { const rs = g.get(f.properties.name); return color(rs && office === 'house' ? (d3.mean(rs, r => r.score > 0.5 ? 1 : r.score < -0.5 ? 0 : 0.5) - 0.5) * 6 : rs?.[0].score); })
     .classed('sel', f => f.properties.name === sel)
     .select('title').text(f => {
       const rs = g.get(f.properties.name);
+      if (rs && office === 'house') { const n = k => rs.filter(r => k(r.score)).length; return `${f.properties.name}: ${n(v => v > 0.5)} D · ${n(v => v < -0.5)} R favored · ${n(v => Math.abs(v) <= 0.5)} tossup`; }
       return rs ? rs.map(r => `${r.label}: ${cat(r.score)[1]}${r.market?.pD != null ? ` · market D ${pct(r.market.pD)}` : ''}`).join('\n') : `${f.properties.name}: no race`;
     });
   renderSeats(); renderDetail(); renderTable();
@@ -191,10 +192,10 @@ function render() {
 }
 
 // ---- Past years on the Governor / Senate / President tabs (past/*.js) ----
-const LIVE = { governor: 2026, senate: 2026, president: 2028 };
+const LIVE = { governor: 2026, senate: 2026, president: 2028, ...(D.house ? { house: 2026 } : {}) }; // old snapshots have no House forecast
 const HOUSE_LATEST = Math.max(...Object.keys(HOUSE.national).map(Number)); // House has no forecast here, only past delegations
 let year = +hashYear || LIVE[office] || HOUSE_LATEST; // #president/1860 opens a past year
-const isPast = () => office === 'house' || office in LIVE && year !== LIVE[office];
+const isPast = () => office === 'house' && !LIVE.house || office in LIVE && year !== LIVE[office];
 if (isPast()) sortKey = 'margin';
 const pastYears = o => o === 'house' ? Object.keys(HOUSE.national).map(Number).reverse() : o === 'president' ? [...PRESIDENT.years].reverse()
   : [...new Set([...Object.values(o === 'senate' ? SENATE : GOVERNOR).flatMap(x => Object.keys(x).map(y => parseInt(y))),
@@ -304,19 +305,19 @@ function renderPast() {
 }
 
 // Seats not on the ballot in 2026. Senate D includes the 2 independents who caucus with Democrats (King, Sanders).
-const NOT_UP = { governor: { D: 6, R: 8 }, senate: { D: 34, R: 31 } };
+const NOT_UP = { governor: { D: 6, R: 8 }, senate: { D: 34, R: 31 }, house: { D: 0, R: 0 } };
 const likely = r => !r.score ? r.incParty : r.score > 0 ? 'D' : 'R'; // ponytail: favorite = sign of consensus, no data or a dead heat counts as a hold
 const PARTY = { D: 'Democrats', R: 'Republicans' };
 const tag = p => `<b style="color:var(--${p.toLowerCase()})">${p}</b>`;
 
 function chamberLine(o) {
   const now = { ...NOT_UP[o] }, next = { ...NOT_UP[o] };
-  for (const r of D[o].races) { now[r.incParty]++; next[likely(r)]++; }
+  for (const r of D[o].races) { if (r.incParty in now) now[r.incParty]++; if (likely(r) in next) next[likely(r)]++; } // vacant/new seats have no current party
   const lead = c => c.D > c.R ? 'D' : c.R > c.D || o === 'senate' ? 'R' : null; // a 50-50 Senate stays R on the VP's tiebreak
-  const flips = D[o].races.filter(r => likely(r) !== r.incParty);
+  const flips = D[o].races.filter(r => r.incParty in NOT_UP[o] && likely(r) !== r.incParty);
   const list = flips.map(r => `${esc(r.label)} ${tag(r.incParty)}→${tag(likely(r))}${Math.abs(r.score) < 0.5 ? ' <span class="sub">(tossup)</span>' : ''}`).join(', ');
   const who = c => lead(c) ? `${PARTY[lead(c)]} control` : 'Tied';
-  return `<div style="margin-bottom:8px"><b>${o === 'governor' ? 'Governors' : 'Senate'}</b> &nbsp;Now ${tag('D')} ${now.D} – ${tag('R')} ${now.R} (${who(now)}) → Likely ${tag('D')} ${next.D} – ${tag('R')} ${next.R} (${who(next)})
+  return `<div style="margin-bottom:8px"><b>${{ governor: 'Governors', senate: 'Senate', house: 'House' }[o]}</b> &nbsp;Now ${tag('D')} ${now.D} – ${tag('R')} ${now.R} (${who(now)}) → Likely ${tag('D')} ${next.D} – ${tag('R')} ${next.R} (${who(next)})
     <div class="sub">${flips.length ? `${flips.length} likely flips: ${list}` : 'No likely flips'}</div></div>`;
 }
 
@@ -333,8 +334,7 @@ function renderFlow() {
   const h = D.control.House?.['Democratic Party'];
   el.innerHTML = `<div class="sub" style="margin-bottom:8px">Who holds power now, and who likely will after Election Day (favorite in each race, by consensus score)</div>
     ${chamberLine('senate')}${chamberLine('governor')}
-    <div><b>House</b> &nbsp;Now Republicans control → ${h == null ? 'no market data' : `Polymarket: ${pct(h)} Democrats take control`}
-    <div class="sub">No seat-by-seat 2026 forecast here, so this is market odds only. The House tab shows every past delegation back to 1789.</div></div>${presLine()}`;
+    ${D.house ? chamberLine('house').replace('</div></div>', `${h == null ? '' : ` · Polymarket: ${pct(h)} Democrats take control`}</div></div>`) : `<div><b>House</b> &nbsp;Now Republicans control → ${h == null ? 'no market data' : `Polymarket: ${pct(h)} Democrats take control`}</div>`}${presLine()}`;
 }
 
 // ---- History tab: 50 years of results and turnout (past/*.js) ----
@@ -456,11 +456,12 @@ function renderSeats() {
 
 function renderDetail() {
   const el = document.getElementById('detail');
-  const rs = sel && byState().get(sel);
-  if (!rs) { el.innerHTML = '<div class="sub">Click a state (or a table row) for every source\'s rating.</div>'; return; }
-  el.innerHTML = rs.map(r => {
+  const all = sel && byState().get(sel), rs = office === 'house' && all ? all.filter(r => r.sources.length) : all;
+  const safe = office === 'house' && all ? all.filter(r => !r.sources.length) : [];
+  if (!all) { el.innerHTML = '<div class="sub">Click a state (or a table row) for every source\'s rating.</div>'; return; }
+  el.innerHTML = (safe.length ? `<div class="sub" style="margin-bottom:10px">${esc(sel)}: ${all.length} seats. ${safe.length} not rated competitive (safe by 2026 lean): ${tag('D')} ${safe.filter(r => r.score > 0).length} · ${tag('R')} ${safe.filter(r => r.score < 0).length}</div>` : '') + rs.map(r => {
     const m = r.market;
-    return `<h2 style="margin:0;font-size:18px">${esc(r.label)} ${{ governor: 'Governor', senate: 'Senate', president: `President 2028 · ${r.ev} electoral votes` }[office]}</h2>
+    return `<h2 style="margin:0;font-size:18px">${esc(r.label)} ${{ governor: 'Governor', senate: 'Senate', house: 'House', president: `President 2028 · ${r.ev} electoral votes` }[office]}</h2>
       <div class="sub">${office === 'president' ? esc(r.incumbent) || 'No 2024 result' : `Incumbent: ${esc(r.incumbent) || '—'} (${esc(r.incParty)}) · PVI ${esc(r.pvi)}`}${r.note ? ' · ' + esc(r.note) : ''}</div>
       <div style="margin:10px 0 2px;font-size:20px;font-weight:600;color:${color(r.score)}">${cat(r.score)[1]} <span class="sub">(${r.score > 0 ? '+' : ''}${r.score})</span></div>
       ${r.spread >= 0.75 ? '<div class="warn">⚠ Sources disagree on this one</div>' : ''}
@@ -539,8 +540,8 @@ function renderTable() {
   const rows = sorted(races(), val);
   const tb = document.getElementById('rows');
   tb.innerHTML = rows.map(r => `<tr data-s="${esc(r.state)}">
-    <td><b>${esc(r.label)}</b>${r.ev ? ` <span class="sub">${r.ev}</span>` : ''}</td><td>${esc(r.incumbent)} (${esc(r.incParty)})${r.note ? ` <span class="sub">${esc(r.note)}</span>` : ''}</td>
-    <td>${likely(r) === r.incParty ? `${tag(r.incParty)} hold` : `${tag(r.incParty)} → ${tag(likely(r))} <b>flip</b>`}</td>
+    <td><b>${esc(r.label)}</b>${r.ev ? ` <span class="sub">${r.ev}</span>` : ''}</td><td>${esc(r.incumbent)}${r.incParty ? ` (${esc(r.incParty)})` : ''}${r.note ? ` <span class="sub">${esc(r.note)}</span>` : ''}</td>
+    <td>${!r.incParty ? `${tag(r.score > 0 ? 'D' : 'R')} favored <span class="sub">(open)</span>` : likely(r) === r.incParty ? `${tag(r.incParty)} hold` : `${tag(r.incParty)} → ${tag(likely(r))} <b>flip</b>`}</td>
     <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color(r.score)}"></span> ${cat(r.score)[1]}</td>
     <td>${r.spread >= 0.75 ? '<span class="warn">' + r.spread + '</span>' : r.spread}</td>
     <td>${pct(r.market?.pD)}</td><td>${esc(r.market?.leader ?? '—')} ${r.market ? pct(r.market.leaderP) : ''}</td></tr>`).join('');

@@ -61,6 +61,35 @@ function eventOdds(ev) {
     return out;
 }
 
+// House 2026: ratings page lists only competitive seats; every other district is Safe for the side its 2026 PVI leans (mid-decade maps make the incumbent's party unreliable).
+const ABBR = { AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming' };
+async function houseForecast() {
+  const text = async page => (await wiki({ action: 'parse', page, prop: 'wikitext', formatversion: 2 })).parse.wikitext;
+  const [all, rated] = await Promise.all([text('2026_United_States_House_of_Representatives_elections'), text('2026_United_States_House_of_Representatives_election_ratings')]);
+  const dist = b => { const m = b.match(/^!(?:[^|{\n]*\|)?\s*\{\{ushr\|(\w\w)\|(\w+)/); return m && [m[1], m[2] === 'AL' ? 'AL' : String(+m[2])]; }; // "!rowspan=2 |{{ushr..." too
+  const blocks = t => t.split(/\n(?:\|-[^\n]*\n)+/).filter(b => dist(b)); // tables sometimes repeat the row separator
+  const head = rated.slice(rated.indexOf('{|'), rated.search(/\n\|-[^\n]*\n!\{\{ushr/));
+  const raters = [...head.matchAll(/^!\s*\[\[[^\]|]*\|([^\]]+)\]\]/gm)].map(m => m[1].trim());
+  const ratings = {};
+  for (const b of blocks(rated)) ratings[dist(b).join('-')] = [...b.matchAll(/\{\{USRaceRating\|([^|}]*)\|?([^|}]*)/g)].map(m => [m[1], m[2]]);
+  const races = [];
+  for (const b of blocks(all.slice(all.search(/\n==\s*Alabama\s*==/)))) { // per-state sections only; earlier tables (retirements, redistricting) list districts too
+    const [st, n] = dist(b), key = st + '-' + n;
+    if (!ABBR[st] || races.some(r => r.label === key)) continue;
+    const pvi = b.match(/[Ss]hading PVI\|(\w)\|(\d+)/), name = b.match(/\{\{sortname\|([^|}]+)\|([^|}]+)/);
+    const party = (b.match(/^\|[^\n]*\|\s*(Republican|Democratic|Independent)\s*$/m) ?? [])[1];
+    const rs = ratings[key] ?? [], r = rs.length ? raters.slice(-rs.length) : [];
+    const sources = rs.map((x, i) => ({ name: r[i], rating: x.join(' ').trim(), score: ratingScore(...x) }));
+    const scores = sources.map(s => s.score).filter(s => s != null);
+    const lean = pvi ? (pvi[1] === 'D' ? 3 : -3) : party === 'Democratic' ? 3 : -3;
+    races.push({ state: ABBR[st], label: key, incumbent: name ? name.slice(1).join(' ') : 'Open/new seat', incParty: party?.[0] ?? '', note: rs.length ? '' : 'not rated competitive',
+      pvi: pvi ? `${pvi[1]}+${pvi[2]}` : 'EVEN', sources, market: null,
+      score: scores.length ? round(mean(scores)) : lean, spread: scores.length > 1 ? round(Math.sqrt(mean(scores.map(s => (s - mean(scores)) ** 2)))) : 0 });
+  }
+  if (races.length < 400) throw new Error(`House forecast parsed only ${races.length} districts`);
+  return { raters, races, wiki: 'https://en.wikipedia.org/wiki/2026_United_States_House_of_Representatives_election_ratings' };
+}
+
 // 2028: no forecaster ratings exist yet, so each state is its Polymarket market alone. EVs per the 2020 census (used 2024-2028).
 const ELECTORS = {"Alabama":9,"Alaska":3,"Arizona":11,"Arkansas":6,"California":54,"Colorado":10,"Connecticut":7,"Delaware":3,"District of Columbia":3,"Florida":30,"Georgia":16,"Hawaii":4,"Idaho":4,"Illinois":19,"Indiana":11,"Iowa":6,"Kansas":6,"Kentucky":8,"Louisiana":8,"Maine":4,"Maryland":10,"Massachusetts":11,"Michigan":15,"Minnesota":10,"Mississippi":6,"Missouri":10,"Montana":4,"Nebraska":5,"Nevada":6,"New Hampshire":4,"New Jersey":14,"New Mexico":5,"New York":28,"North Carolina":16,"North Dakota":3,"Ohio":17,"Oklahoma":7,"Oregon":8,"Pennsylvania":19,"Rhode Island":4,"South Carolina":9,"South Dakota":3,"Tennessee":11,"Texas":40,"Utah":6,"Vermont":3,"Virginia":13,"Washington":12,"West Virginia":4,"Wisconsin":10,"Wyoming":3};
 async function president() { // ponytail: Maine/Nebraska district electors folded into the statewide winner
@@ -205,9 +234,9 @@ async function earlyVote() { // whoshowsup.net's data file (civicAPI, state elec
 }
 
 async function loadData() {
-  const [governor, senate, early, sen, house, pres] = await Promise.all([build('governor'), build('senate'), earlyVote(),
-    control('which-party-will-win-the-senate-in-2026'), control('which-party-will-win-the-house-in-2026'), president().catch(() => null)]);
-  return { governor, senate, early, president: pres, control: { Senate: sen, House: house }, updated: new Date().toISOString() };
+  const [governor, senate, early, sen, house, pres, houseRaces] = await Promise.all([build('governor'), build('senate'), earlyVote(),
+    control('which-party-will-win-the-senate-in-2026'), control('which-party-will-win-the-house-in-2026'), president().catch(() => null), houseForecast().catch(e => (console.warn('house forecast unavailable', e), null))]);
+  return { governor, senate, early, president: pres, house: houseRaces, control: { Senate: sen, House: house }, updated: new Date().toISOString() };
 }
 
 if (typeof module !== 'undefined') module.exports = { loadData };

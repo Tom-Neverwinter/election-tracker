@@ -8,7 +8,7 @@ const run = (cmd, args) => { try { return execFileSync(cmd, args, { cwd: dir, en
 const load = (file, prefix) => { try { return JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8').trim().replace(/;$/, '').slice(prefix.length)); } catch { return null; } };
 
 const now = new Date(), pad = n => String(n).padStart(2, '0');
-const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}`;
+const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}-${pad(now.getMinutes())}`;
 log(`start ${stamp}`);
 log('snapshot: ' + run(process.execPath, ['snapshot.js']));
 log('results: ' + run(process.execPath, ['results.js']));

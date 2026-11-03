@@ -298,7 +298,7 @@ function renderMeasures() {
 
 // ---- Timeline tab: hour by hour through election night (hourly/index.js, built by hourly-index.js) ----
 const HR = window.HOURLY ?? [];
-const hrTime = t => new Date(t).toLocaleString([], { weekday: 'short', hour: 'numeric' });
+const hrTime = t => new Date(t).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 function tchart(title, series, { fmt = v => v, lo, hi, ref } = {}) { // small multi-line chart over capture time
   const W = 360, H = 150, m = { t: 10, r: 78, b: 20, l: 44 };
   const pts = series.flatMap(s => s.pts), ts = HR.map(h => new Date(h.t));

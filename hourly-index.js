@@ -26,8 +26,8 @@ function summarize(cap) {
 }
 
 function build() {
-  const files = fs.readdirSync(dir).filter(f => /^\d{4}-\d\d-\d\dT\d\d\.json$/.test(f)).sort();
-  const rows = files.map(f => { try { return summarize(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))); } catch { return null; } }).filter(Boolean);
+  const files = fs.readdirSync(dir).filter(f => /^\d{4}-\d\d-\d\dT\d\d(-\d\d)?\.json$/.test(f)).sort();
+  const rows = files.map(f => { try { return summarize(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))); } catch { return null; } }).filter(Boolean).sort((a, b) => a.t.localeCompare(b.t));
   fs.writeFileSync(path.join(dir, 'index.js'), '// Hour-by-hour summary of hourly/*.json, built by hourly-index.js.\nwindow.HOURLY = [\n' + rows.map(r => '  ' + JSON.stringify(r)).join(',\n') + '\n];\n');
   return rows;
 }

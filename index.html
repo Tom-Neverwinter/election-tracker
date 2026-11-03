@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2026 Election Tracker</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --ink:#1b1b1b; --mute:#6b6b6b; --line:#e2e2de; --none:#d9d9d4; --d:#2b6cb0; --r:#c53030; --s1:#1f7a4d; --s2:#b45309; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141414; --card:#1e1e1e; --ink:#eee; --mute:#9a9a9a; --line:#333; --none:#3a3a3a; --d:#63a4ff; --r:#ff6b6b; --s1:#38a56f; --s2:#b97f26; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width:1200px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mute); font-size:13px; }
+  .bar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:14px 0; }
+  .tabs button, .modes button { font:inherit; padding:6px 14px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  .tabs button:first-child, .modes button:first-child { border-radius:6px 0 0 6px; } .tabs button:last-child, .modes button:last-child { border-radius:0 6px 6px 0; }
+  .tabs button[aria-pressed=true], .modes button[aria-pressed=true] { background:var(--ink); color:var(--bg); }
+  .pill { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:13px; }
+  .grid { display:grid; grid-template-columns: minmax(0,2fr) minmax(280px,1fr); gap:16px; }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  svg path.st { stroke:var(--bg); stroke-width:.8; cursor:pointer; }
+  svg path.st:hover, svg path.st.sel { stroke:var(--ink); stroke-width:2; }
+  .legend { display:flex; gap:2px; margin-top:8px; font-size:12px; color:var(--mute); flex-wrap:wrap; }
+  .legend span { display:inline-flex; align-items:center; gap:4px; margin-right:8px; }
+  .legend i { width:14px; height:14px; border-radius:3px; display:inline-block; }
+  .chips { display:flex; flex-direction:column; gap:4px; margin:8px 0; }
+  .chip { display:flex; justify-content:space-between; padding:4px 8px; border-radius:4px; font-size:13px; }
+  .warn { color:#b7791f; font-weight:600; font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--mute); font-weight:500; cursor:pointer; user-select:none; }
+  tr { cursor:pointer; } tbody tr:hover { background:var(--bg); }
+  .tw { overflow-x:auto; }
+  a { color:var(--d); }
+  .seats { display:flex; height:22px; border-radius:4px; overflow:hidden; margin:6px 0 2px; }
+  .seats div { display:flex; align-items:center; justify-content:center; font-size:11px; color:#111; }
+</style>
+</head>
+<body>
+<main>
+  <h1>2026 Election Tracker</h1>
+  <div class="sub" id="updated"></div>
+
+  <div class="bar">
+    <div class="tabs" role="group"><button data-o="governor">Governor</button><button data-o="senate">Senate</button><button data-o="early">Early vote</button><button data-o="history">History</button></div>
+    <select class="pill" id="day" aria-label="Show data from" style="color:inherit"><option value="">Live</option></select>
+    <div class="pill" id="control"></div>
+  </div>
+
+  <div class="card" id="flow" style="margin-bottom:16px"></div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="modes" id="modes" role="group" aria-label="Color the map by" style="margin-bottom:8px" hidden></div>
+      <svg id="map" viewBox="0 0 975 610" role="img" aria-label="US map colored by consensus rating"></svg>
+      <div class="seats" id="seats"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="card" id="detail"><div class="sub">Click a state for every source's rating.</div></div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="modes" id="hmodes" role="group" aria-label="History table" style="margin-bottom:8px" hidden><button data-v="state">By state</button><button data-v="pres">Every president</button></div>
+    <div class="sub" style="margin-bottom:6px" id="tnote"></div>
+    <div class="tw"><table><thead><tr id="thead"></tr></thead><tbody id="rows"></tbody></table></div>
+  </div>
+  <p class="sub" id="srcs"></p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="data.js"></script>
+<script src="history.js"></script>
+<script src="past.js"></script>
+<script type="module">
+// ---- live data is fetched fresh on open, unless ?day=YYYY-MM-DD picks a saved snapshot ----
+const status = t => document.getElementById('updated').textContent = t;
+const HISTORY = window.HISTORY ?? {}, day = new URLSearchParams(location.search).get('day'), saved = HISTORY[day];
+const picker = document.getElementById('day');
+picker.append(...Object.keys(HISTORY).sort().reverse().map(d => new Option(d, d)));
+picker.value = saved ? day : '';
+picker.onchange = () => location.search = picker.value && '?day=' + picker.value;
+if (!saved) status('Loading live data from Wikipedia, Polymarket and the early-vote feed…');
+let D = saved;
+try {
+  D ??= await loadData();
+} catch (e) {
+  document.querySelector('main').innerHTML = `<h1>Couldn't load data</h1><p>${String(e).replace(/</g, '&lt;')}</p><p>Check your connection and reload.</p>`;
+  throw e;
+}
+
+const CATS = [ // score thresholds on the −3 (Safe R) … +3 (Safe D) scale
+  [2.5, 'Safe D', '#1c4e8f'], [1.5, 'Likely D', '#4a86c8'], [0.5, 'Lean D', '#9ec3ea'],
+  [-0.5, 'Tossup', '#e7d48a'], [-1.5, 'Lean R', '#f0a8a8'], [-2.5, 'Likely R', '#d86464'], [-Infinity, 'Safe R', '#a02626'],
+];
+const cat = s => CATS.find(([t]) => s >= t);
+const color = s => s == null ? 'var(--none)' : cat(s)[2];
+const pct = p => p == null ? '—' : Math.round(p * 100) + '%';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let office = location.hash.slice(1) || localStore('office') || 'governor', sel = null, sortKey = 'abs', sortDir = 1, geo;
+
+function localStore(k, v) { try { return v === undefined ? localStorage.getItem(k) : localStorage.setItem(k, v); } catch { return null; } }
+
+document.getElementById('updated').textContent =
+  `${saved ? 'Snapshot from' : 'Live as of'} ${new Date(D.updated).toLocaleString()} · consensus = average of ${D.governor.raters.length}–${D.senate.raters.length} forecasters + Polymarket odds`;
+document.getElementById('control').innerHTML = Object.entries(D.control).map(([ch, o]) =>
+  `${ch} control (Polymarket): ` + Object.entries(o).map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ')).join(' &nbsp;·&nbsp; ');
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
+});
+if (!D.early) document.querySelector('[data-o=early]').remove();
+if (office === 'early' && !D.early) office = 'governor';
+if (office === 'early') { sortKey = 'per'; sortDir = -1; }
+if (office === 'history') { sortKey = 't22'; sortDir = -1; }
+
+const EV = D.early ? new Map(D.early.states.map(s => [s.state_name, s])) : new Map();
+const share = s => s.cast / s.turnout22; // ponytail: share of total 2022 turnout, not same-day 2022 pace (no public 2022 daily series)
+const evColor = d3.scaleSequential([0, 0.5], d3.interpolateGreens).clamp(true);
+const fmt = d3.format(',');
+const num = v => v == null ? '—' : fmt(v);
+const pop = s => POP[s.state_name][0], elig = s => POP[s.state_name][1], voted = s => s.cast / elig(s);
+const pct1 = p => (p * 100).toFixed(1) + '%';
+const feed = s => s.feedCast ?? s.cast; // what the automatic feed reported, before any hand correction
+const per = s => Math.round(s.cast / elig(s) * 1e5), perPop = s => Math.round(s.cast / pop(s) * 1e5); // ballots per 100,000 eligible voters / residents
+const rateColor = d3.scaleSequential([0, 40000], d3.interpolateGreens).clamp(true);
+const castColor = d3.scaleSequentialSqrt([0, 7e6], d3.interpolateGreens).clamp(true); // sqrt so Texas and California don't wash out everyone else
+const MODES = {
+  per: { label: 'Per 100k eligible', val: s => per(s), color: rateColor, stops: [0, 10000, 20000, 30000, 40000], show: v => fmt(v), unit: 'ballots per 100,000 eligible voters' },
+  share: { label: '% of 2022 vote', val: s => share(s), color: evColor, stops: [0, .1, .2, .3, .4, .5], show: v => pct(v), unit: "of the state's total 2022 vote, already cast" },
+  cast: { label: 'Raw ballots', val: s => s.cast, color: castColor, stops: [0, 100000, 500000, 1000000, 3000000, 7000000], show: v => d3.format('.2~s')(v), unit: 'ballots cast (not adjusted for size)' },
+};
+let mode = localStore('evMode') in MODES ? localStore('evMode') : 'per';
+document.getElementById('modes').innerHTML = Object.entries(MODES).map(([k, m]) => `<button data-m="${k}">${m.label}</button>`).join('');
+document.querySelectorAll('#modes button').forEach(b => b.onclick = () => { mode = b.dataset.m; localStore('evMode', mode); renderEarly(); });
+const races = () => D[office].races;
+const byState = () => d3.group(races(), r => r.state);
+const raceIn = st => ['governor', 'senate'].flatMap(o => D[o].races.filter(r => r.state === st).map(r => [o, r]));
+
+function spark(vals, w = 260, h = 50) { // cumulative ballots line
+  const x = d3.scaleLinear([0, vals.length - 1], [0, w]), y = d3.scaleLinear([0, d3.max(vals) || 1], [h - 2, 2]);
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none"><path d="${d3.line((v, i) => x(i), y)(vals)}" fill="none" stroke="#38a169" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then(r => r.json()).then(us => {
+  geo = topojson.feature(us, us.objects.states).features;
+  d3.select('#map').append('g').selectAll('path').data(geo).join('path')
+    .attr('class', 'st').attr('d', d3.geoPath())
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'early' ? EV.has(f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .append('title');
+  render();
+});
+
+function render() {
+  document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-pressed', b.dataset.o === office));
+  document.getElementById('modes').hidden = office !== 'early';
+  document.getElementById('hmodes').hidden = office !== 'history';
+  renderFlow();
+  if (office === 'early') return renderEarly();
+  if (office === 'history') return renderHistory();
+  document.getElementById('legend').innerHTML = CATS.map(c => `<span><i style="background:${c[2]}"></i>${c[1]}</span>`).join('') +
+    `<span><i style="background:var(--none)"></i>No race</span>`;
+  const g = byState();
+  d3.selectAll('path.st')
+    .attr('fill', f => color(g.get(f.properties.name)?.[0].score))
+    .classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => {
+      const rs = g.get(f.properties.name);
+      return rs ? rs.map(r => `${r.label}: ${cat(r.score)[1]}${r.market?.pD != null ? ` · market D ${pct(r.market.pD)}` : ''}`).join('\n') : `${f.properties.name}: no race`;
+    });
+  renderSeats(); renderDetail(); renderTable();
+  document.getElementById('srcs').innerHTML = `Sources: <a href="${D[office].wiki}">Wikipedia's ${office} ratings table</a> (${D[office].raters.map(esc).join(', ')}) and <a href="https://polymarket.com">Polymarket</a>.`;
+}
+
+// Seats not on the ballot in 2026. Senate D includes the 2 independents who caucus with Democrats (King, Sanders).
+const NOT_UP = { governor: { D: 6, R: 8 }, senate: { D: 34, R: 31 } };
+const likely = r => !r.score ? r.incParty : r.score > 0 ? 'D' : 'R'; // ponytail: favorite = sign of consensus, no data or a dead heat counts as a hold
+const PARTY = { D: 'Democrats', R: 'Republicans' };
+const tag = p => `<b style="color:var(--${p.toLowerCase()})">${p}</b>`;
+
+function chamberLine(o) {
+  const now = { ...NOT_UP[o] }, next = { ...NOT_UP[o] };
+  for (const r of D[o].races) { now[r.incParty]++; next[likely(r)]++; }
+  const lead = c => c.D > c.R ? 'D' : c.R > c.D || o === 'senate' ? 'R' : null; // a 50-50 Senate stays R on the VP's tiebreak
+  const flips = D[o].races.filter(r => likely(r) !== r.incParty);
+  const list = flips.map(r => `${esc(r.label)} ${tag(r.incParty)}→${tag(likely(r))}${Math.abs(r.score) < 0.5 ? ' <span class="sub">(tossup)</span>' : ''}`).join(', ');
+  const who = c => lead(c) ? `${PARTY[lead(c)]} control` : 'Tied';
+  return `<div style="margin-bottom:8px"><b>${o === 'governor' ? 'Governors' : 'Senate'}</b> &nbsp;Now ${tag('D')} ${now.D} – ${tag('R')} ${now.R} (${who(now)}) → Likely ${tag('D')} ${next.D} – ${tag('R')} ${next.R} (${who(next)})
+    <div class="sub">${flips.length ? `${flips.length} likely flips: ${list}` : 'No likely flips'}</div></div>`;
+}
+
+function renderFlow() {
+  const el = document.getElementById('flow');
+  const h = D.control.House?.['Democratic Party'];
+  el.innerHTML = `<div class="sub" style="margin-bottom:8px">Who holds power now, and who likely will after Election Day (favorite in each race, by consensus score)</div>
+    ${chamberLine('senate')}${chamberLine('governor')}
+    <div><b>House</b> &nbsp;Now Republicans control → ${h == null ? 'no market data' : `Polymarket: ${pct(h)} Democrats take control`}
+    <div class="sub">No seat-by-seat data for the House here, so this is market odds only.</div></div>`;
+}
+
+// ---- History tab: 50 years of results and turnout (past.js) ----
+const P = window.PAST?.states ?? {};
+const turnoutColor = d3.scaleSequential([30, 70], d3.interpolateGreens).clamp(true);
+const pc = v => v == null ? '—' : v.toFixed(1) + '%';
+const result = r => !r ? '—' : `${tag(r[2])} ${r[3] ? esc(r[3]) + ' ' : ''}<span class="sub">${r[0] ? 'D ' + r[0] : ''}${r[0] && r[1] ? ' · ' : ''}${r[1] ? 'R ' + r[1] : ''}</span>`;
+const nowRate = name => EV.has(name) ? voted(EV.get(name)) * 100 : null;
+const nationNow = () => D.early ? d3.sum(D.early.states, s => s.cast) / d3.sum(D.early.states, elig) * 100 : null;
+const midAvg = t => d3.mean(Object.entries(t).filter(([y]) => y % 4 === 2).map(([, v]) => v));
+
+let chart; // series for the hover readout
+let histView = 'state';
+document.querySelectorAll('#hmodes button').forEach(b => b.onclick = () => {
+  histView = b.dataset.v; sel = null; sortKey = histView === 'pres' ? 'year' : 't22'; sortDir = -1; renderHistory();
+});
+const NEVER_ELECTED = [ // took office by succession and never won a general election for president
+  [1841, 'John Tyler', 'Whig', 'Took office when William Henry Harrison died'],
+  [1850, 'Millard Fillmore', 'Whig', 'Took office when Zachary Taylor died'],
+  [1865, 'Andrew Johnson', 'National Union', 'Took office when Abraham Lincoln was assassinated'],
+  [1881, 'Chester A. Arthur', 'Republican', 'Took office when James A. Garfield was assassinated'],
+  [1974, 'Gerald Ford', 'Republican', 'Took office when Richard Nixon resigned; lost in 1976'],
+];
+const PRES_NOTES = {
+  1788: 'Unopposed', 1792: 'Unopposed', 1800: 'Electoral tie with Burr; decided by the House',
+  1824: 'No majority; decided by the House. Winner lost the popular and electoral vote', 1872: 'Greeley died before the electors voted',
+  1876: 'Decided by an electoral commission; winner lost the popular vote', 1888: 'Winner lost the popular vote', 2000: 'Winner lost the popular vote', 2016: 'Winner lost the popular vote',
+};
+function renderPresidents(tb) {
+  head([['year', 'Year'], ['name', 'Winner'], ['party', 'Party'], ['ev', 'Electoral'], ['pv', 'Popular vote'], ['pct', 'Share'], ['rname', 'Runner-up'], ['rev', 'Electoral'], ['rpv', 'Popular vote'], ['rpct', 'Share'], ['turnout', 'Turnout'], [null, 'Notes']],
+    `All ${PAST.pres.length} presidential elections, 1788–2024, plus the ${NEVER_ELECTED.length} presidents who never won one. Popular votes before 1824 are incomplete because many states had no statewide vote, and until 1804 each elector cast two votes.`);
+  const rows = PAST.pres.map(([year, turnout, c]) => {
+    const [w, r] = c, n = v => v ?? undefined;
+    return { year, turnout, name: w[0], party: w[1], ev: w[2], pv: w[3], pct: w[4], rname: r?.[0], rev: r?.[2], rpv: r?.[3], rpct: r?.[4], note: PRES_NOTES[year] ?? '' };
+  }).concat(NEVER_ELECTED.map(([year, name, party, note]) => ({ year, name, party, note, never: true })));
+  tb.innerHTML = sorted(rows, r => r[sortKey] ?? -1).map(r => `<tr style="cursor:default"><td><b>${r.year}</b></td><td>${esc(r.name)}</td><td>${esc(r.party)}</td><td>${num(r.ev)}</td><td>${num(r.pv)}</td><td>${pc(r.pct)}</td>
+    <td>${esc(r.rname ?? '—')}</td><td>${num(r.rev)}</td><td>${num(r.rpv)}</td><td>${pc(r.rpct)}</td><td>${pc(r.turnout)}</td><td class="sub">${esc(r.note)}</td></tr>`).join('');
+}
+function lineChart(series, now) {
+  const W = 380, H = 205, m = { t: 12, r: 12, b: 22, l: 34 };
+  const yrs = series.flatMap(s => s.pts.map(p => p[0]));
+  const x = d3.scaleLinear([d3.min(yrs), 2026], [m.l, W - m.r]), y = d3.scaleLinear([0, 100], [H - m.b, m.t]);
+  chart = { series, x, W, m };
+  const grid = [0, 25, 50, 75, 100].map(v => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${m.l - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--mute)">${v}%</text>`).join('');
+  const ticks = x.ticks(5).map(v => `<text x="${x(v)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--mute)">${v}</text>`).join('');
+  const line = d3.line(p => x(p[0]), p => y(p[1]));
+  const paths = series.map(s => `<path d="${line(s.pts)}" fill="none" stroke="${s.color}" stroke-width="2"/>`).join('');
+  const dot = now == null ? '' : `<circle cx="${x(2026)}" cy="${y(now)}" r="5" fill="var(--ink)" stroke="var(--card)" stroke-width="2"/>`;
+  return `<div id="chartbox" style="position:relative"><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Turnout of eligible voters by election year; the year table holds the same numbers" style="touch-action:pan-y">${grid}${ticks}${paths}${dot}<line id="cross" y1="${m.t}" y2="${H - m.b}" stroke="var(--mute)" visibility="hidden"/><rect id="hit" x="${m.l}" y="0" width="${W - m.l - m.r}" height="${H}" fill="transparent"/></svg><div id="tip" class="pill" style="position:absolute;top:0;pointer-events:none;display:none;white-space:nowrap"></div></div>
+    <div class="legend">${series.map(s => `<span><i style="background:${s.color};height:3px"></i>${s.name}</span>`).join('')}${now == null ? '' : `<span><i style="background:var(--ink);border-radius:50%;width:10px;height:10px"></i>2026 early vote so far ${now.toFixed(1)}%</span>`}</div>`;
+}
+function wireChart() {
+  const hit = document.getElementById('hit'), tip = document.getElementById('tip'), cross = document.getElementById('cross'), box = document.getElementById('chartbox');
+  if (!hit) return;
+  hit.onpointerleave = () => { tip.style.display = 'none'; cross.setAttribute('visibility', 'hidden'); };
+  hit.onpointermove = e => {
+    const b = box.getBoundingClientRect(), px = (e.clientX - b.left) / b.width * chart.W, yr = Math.round(chart.x.invert(px));
+    const near = chart.series.flatMap(s => s.pts).reduce((a, p) => Math.abs(p[0] - yr) < Math.abs(a - yr) ? p[0] : a, Infinity);
+    const rows = chart.series.map(s => [s.name, s.pts.find(p => p[0] === near)?.[1]]).filter(r => r[1] != null);
+    tip.innerHTML = `<b>${near}</b> ` + rows.map(([n, v]) => `${n} ${v.toFixed(1)}%`).join(' · ');
+    tip.style.display = 'block'; tip.style.left = Math.min(e.clientX - b.left + 10, b.width - tip.offsetWidth) + 'px';
+    cross.setAttribute('x1', chart.x(near)); cross.setAttribute('x2', chart.x(near)); cross.setAttribute('visibility', 'visible');
+  };
+}
+
+function renderHistory() {
+  if (sel) histView = 'state';
+  document.querySelectorAll('#hmodes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === histView));
+  const legendVals = [30, 40, 50, 60, 70];
+  document.getElementById('legend').innerHTML = legendVals.map((v, i) => `<span><i style="background:${turnoutColor(v)}"></i>${i === 0 ? '≤' : ''}${v}%${i === 4 ? '+' : ''}</span>`).join('') + `<span>of eligible voters who voted in the 2022 midterm</span>`;
+  d3.selectAll('path.st')
+    .attr('fill', f => { const t = P[f.properties.name]?.t[2022]; return t == null ? 'var(--none)' : turnoutColor(t); })
+    .classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => { const s = P[f.properties.name]; return s ? `${f.properties.name}: ${pc(s.t[2022])} voted in 2022 · midterm average ${pc(midAvg(s.t))}` : f.properties.name; });
+  document.getElementById('seats').innerHTML = '';
+  const el = document.getElementById('detail'), s = P[sel];
+  const col = ['var(--s1)', 'var(--s2)'];
+  if (!s) {
+    const nat = PAST.national;
+    el.innerHTML = `<h2 style="margin:0;font-size:18px">Nationwide turnout since 1789</h2>
+      ${lineChart([{ name: 'Presidential years', color: col[0], pts: nat.filter(r => r[1] != null).map(r => [r[0], r[1]]) }, { name: 'Midterm years', color: col[1], pts: nat.filter(r => r[2] != null).map(r => [r[0], r[2]]) }], nationNow())}
+      <p class="sub">Share of eligible voters who voted. The 2026 dot counts early ballots only, so it will rise on Election Day. Click a state for its results back to 1976.</p>`;
+  } else {
+    const yrs = Object.keys(s.t).map(Number).sort((a, b) => a - b);
+    const lastOf = o => Object.keys(o).sort().at(-1), mids = yrs.filter(y => y % 4 === 2);
+    const hi = d3.greatest(mids, y => s.t[y]), lo = d3.least(mids, y => s.t[y]);
+    el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(sel)} since ${yrs[0]}</h2>
+      ${lineChart([{ name: 'Presidential years', color: col[0], pts: yrs.filter(y => y % 4 === 0).map(y => [y, s.t[y]]) }, { name: 'Midterm years', color: col[1], pts: mids.map(y => [y, s.t[y]]) }], nowRate(sel))}
+      <div class="sub">Midterm average ${pc(midAvg(s.t))} · high ${pc(s.t[hi])} in ${hi} · low ${pc(s.t[lo])} in ${lo}</div>
+      <div style="margin-top:8px"><a href="#" id="allst">← All states</a></div>`;
+    document.getElementById('allst').onclick = e => { e.preventDefault(); sel = null; sortKey = 't22'; sortDir = -1; render(); };
+  }
+  wireChart();
+  const tb = document.getElementById('rows');
+  if (histView === 'pres') renderPresidents(tb);
+  else if (s) {
+    head([[null, 'Year'], [null, 'Turnout'], [null, 'President'], [null, 'Senate'], [null, 'Governor']], `${sel}, newest first. Bold letter = winning party; D and R = each party's share of the vote.`);
+    const keys = o => Object.keys(o).map(k => parseInt(k));
+    const years = [...new Set([...keys(s.t), ...keys(s.p), ...keys(s.s), ...keys(s.g)])].sort((a, b) => b - a);
+    tb.innerHTML = years.map(y => `<tr style="cursor:default"><td><b>${y}</b></td><td>${pc(s.t[y])}</td><td>${result(s.p[y])}</td>
+      <td>${[s.s[y], s.s[y + 's']].filter(Boolean).map(result).join('<br>') || '—'}</td><td>${result(s.g[y])}</td></tr>`).join('');
+  } else {
+    head([['state', 'State'], ['now', '2026 early so far'], ['t22', '2022 turnout'], ['t18', '2018 turnout'], ['avg', 'Midterm average'], ['t24', '2024 turnout'], ['m24', '2024 president']],
+      'Turnout = share of eligible voters. Midterm average covers 1982–2022; where total ballots are unknown, votes in the top race are used. 2026 counts early ballots only, against citizens 18+. Click a state for its full history.');
+    const rows = Object.entries(P).map(([state, v]) => ({ state, now: nowRate(state), t22: v.t[2022], t18: v.t[2018], t24: v.t[2024], avg: midAvg(v.t), m24: v.p[2024] ? v.p[2024][0] - v.p[2024][1] : null }));
+    tb.innerHTML = sorted(rows, r => r[sortKey] ?? -1e9).map(r => `<tr data-s="${esc(r.state)}"><td><b>${esc(r.state)}</b></td><td>${pc(r.now)}</td>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${turnoutColor(r.t22)}"></span> ${pc(r.t22)}</td><td>${pc(r.t18)}</td><td>${pc(r.avg)}</td><td>${pc(r.t24)}</td>
+      <td>${r.m24 == null ? '—' : `${tag(r.m24 > 0 ? 'D' : 'R')} +${Math.abs(r.m24).toFixed(1)}`}</td></tr>`).join('');
+    tb.querySelectorAll('tr[data-s]').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  }
+  document.getElementById('srcs').innerHTML = `History: results for President and Senate from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a> (1976–2024), governors from Wikipedia's yearly tables, turnout from the <a href="https://election.lab.ufl.edu/voter-turnout/">UF Election Lab</a> (states 1980–2024, nation 1789–2024). Every-president table from Wikipedia's election pages.`;
+}
+
+function renderSeats() {
+  const counts = CATS.map(c => [c, races().filter(r => r.score != null && cat(r.score) === c).length]);
+  document.getElementById('seats').innerHTML = counts.filter(([, n]) => n).map(([c, n]) =>
+    `<div style="flex:${n};background:${c[2]}" title="${c[1]}: ${n}">${n}</div>`).join('');
+}
+
+function renderDetail() {
+  const el = document.getElementById('detail');
+  const rs = sel && byState().get(sel);
+  if (!rs) { el.innerHTML = '<div class="sub">Click a state (or a table row) for every source\'s rating.</div>'; return; }
+  el.innerHTML = rs.map(r => {
+    const m = r.market;
+    return `<h2 style="margin:0;font-size:18px">${esc(r.label)} ${office === 'governor' ? 'Governor' : 'Senate'}</h2>
+      <div class="sub">Incumbent: ${esc(r.incumbent) || '—'} (${esc(r.incParty)})${r.note ? ' · ' + esc(r.note) : ''} · PVI ${esc(r.pvi)}</div>
+      <div style="margin:10px 0 2px;font-size:20px;font-weight:600;color:${color(r.score)}">${cat(r.score)[1]} <span class="sub">(${r.score > 0 ? '+' : ''}${r.score})</span></div>
+      ${r.spread >= 0.75 ? '<div class="warn">⚠ Sources disagree on this one</div>' : ''}
+      <div class="chips">${r.sources.map(s => `<div class="chip" style="background:${color(s.score)};color:${Math.abs(s.score) >= 1.5 ? '#fff' : '#111'}"><span>${esc(s.name)}</span><b>${esc(s.rating)}</b></div>`).join('')}</div>
+      ${m ? `<div class="sub">Polymarket: <b>${esc(m.leader)}</b> ${pct(m.leaderP)}${m.pD != null ? ` · P(D) ${pct(m.pD)}` : ''} · $${(m.volume / 1e3).toFixed(0)}k volume · <a href="${esc(m.url)}" target="_blank" rel="noopener">market</a></div>` : '<div class="sub">No Polymarket market found.</div>'}`;
+  }).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
+}
+
+function head(cols, note) { // cols: [key|null, label]
+  document.getElementById('tnote').textContent = note;
+  const tr = document.getElementById('thead');
+  tr.innerHTML = cols.map(([k, l]) => `<th${k ? ` data-k="${k}"` : ''}>${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
+  tr.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
+    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; ({ early: renderEarly, history: renderHistory }[office] ?? renderTable)();
+  });
+}
+const sorted = (rows, val) => [...rows].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sortDir);
+
+function renderEarly() {
+  const M = MODES[mode];
+  document.querySelectorAll('#modes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === mode));
+  const E = D.early, states = E.states;
+  const total = d3.sum(states, s => s.cast), t22 = d3.sum(states, s => s.turnout22);
+  const nat = E.dates.map((_, i) => d3.sum(states.filter(s => s.series), s => s.series[i])); // hand-entered states have no daily series
+  const allPop = d3.sum(Object.values(POP), p => p[0]), allElig = d3.sum(Object.values(POP), p => p[1]), repElig = d3.sum(states, elig);
+  const turnoutBar = v => `<div class="seats" title="share of eligible voters"><div style="flex:${v};background:#38a169;color:#fff">Voted ${pct1(v)}</div><div style="flex:${1 - v};background:var(--none);color:var(--ink)">Not yet ${pct1(1 - v)}</div></div>`;
+  const ps = states.filter(s => s.dem != null), pt = d3.sum(ps, s => s.dem + s.rep + s.other);
+  document.getElementById('legend').innerHTML = M.stops.map((v, i) => `<span><i style="background:${M.color(v)}"></i>${M.show(v)}${i === M.stops.length - 1 ? '+' : ''}</span>`).join('') +
+    `<span><i style="background:var(--none)"></i>Not reporting</span> <span>${M.unit}</span>`;
+  d3.selectAll('path.st')
+    .attr('fill', f => EV.has(f.properties.name) ? M.color(M.val(EV.get(f.properties.name))) : 'var(--none)')
+    .classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => { const s = EV.get(f.properties.name); return s ? `${s.state_name}: ${fmt(s.cast)} cast · ${fmt(per(s))} per 100,000 eligible · ${pct(share(s))} of 2022 vote` : `${f.properties.name}: not reporting`; });
+  document.getElementById('seats').innerHTML = '';
+  const s = sel && EV.get(sel), el = document.getElementById('detail');
+  const partyLine = (d, r, o, n) => `<div class="seats" title="registered party of voters who've cast ballots"><div style="flex:${d};background:#4a86c8;color:#fff">D ${pct(d / n)}</div><div style="flex:${o};background:var(--none);color:var(--ink)">Other ${pct(o / n)}</div><div style="flex:${r};background:#d86464;color:#fff">R ${pct(r / n)}</div></div>`;
+  el.innerHTML = !s ? `<h2 style="margin:0;font-size:18px">Nationwide</h2>
+      <div style="font-size:26px;font-weight:700">${fmt(total)}</div><div class="sub">corrected total · feed alone ${fmt(d3.sum(states, feed))} · hand corrections add ${fmt(total - d3.sum(states, feed))}</div><div class="sub">ballots cast in ${states.length} reporting places (states + DC) as of ${E.asOf} · ${pct(total / t22)} of those states' 2022 total vote</div>
+      <div style="margin-top:8px" class="sub">US population ${fmt(allPop)} · ${fmt(allElig)} eligible voters. In the reporting places, of ${fmt(repElig)} eligible:</div>
+      ${turnoutBar(total / repElig)}
+      <div class="sub">${fmt(Math.round(total / repElig * 1e5))} ballots per 100,000 eligible voters</div>
+      <div class="sub">"Not yet" includes people who will vote by Election Day as well as those who won't vote at all.</div>
+      ${spark(nat)}<div class="sub">Cumulative ballots in feed states, ${E.dates[0]} → ${E.asOf}</div>
+      <div style="margin-top:10px" class="sub">Party registration of early voters, ${ps.length} states that report it:</div>${partyLine(d3.sum(ps, s => s.dem), d3.sum(ps, s => s.rep), d3.sum(ps, s => s.other), pt)}
+      <p class="sub">Registration ≠ vote choice, and early voters skew differently than Election Day voters: mail leans D, early in-person leaned R in 2024. Compare a state to its own history, not to 50/50. Click a state for details.</p>`
+    : `<h2 style="margin:0;font-size:18px">${esc(s.state_name)}</h2>
+      <div style="font-size:26px;font-weight:700">${fmt(s.cast)}</div><div class="sub">ballots cast as of ${esc(s.date)} · ${pct(share(s))} of 2022's total vote (${fmt(s.turnout22)})</div>
+      <div style="margin-top:8px" class="sub">Population ${fmt(pop(s))} · ${fmt(elig(s))} eligible voters</div>
+      ${turnoutBar(voted(s))}
+      <div class="sub">${fmt(per(s))} ballots per 100,000 eligible voters · ${fmt(perPop(s))} per 100,000 residents</div>
+      ${s.note ? `<div class="warn">Hand-entered: ${esc(s.note)}<br>Feed count ${fmt(feed(s))} → corrected ${fmt(s.cast)} (+${fmt(s.cast - feed(s))})${s.series ? '. Trend line shows the feed only.' : ''}</div>` : ''}
+      ${s.flag ? `<div class="warn">⚠ ${esc(s.flag)}</div>` : ''}
+      ${s.series ? spark(s.series) : ''}
+      <div class="sub">Mail returned ${num(s.returned)} of ${num(s.requested)} requested · in-person early ${num(s.inperson)}</div>
+      ${s.dem != null ? partyLine(s.dem, s.rep, s.other, s.dem + s.rep + s.other) : '<div class="sub" style="margin-top:8px">State doesn\'t report party of early voters.</div>'}
+      ${raceIn(s.state_name).map(([o, r]) => `<div style="margin-top:6px"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color(r.score)}"></span> ${o === 'governor' ? 'Governor' : 'Senate'}: ${cat(r.score)[1]}${r.market?.pD != null ? ` · market D ${pct(r.market.pD)}` : ''}</div>`).join('')}`;
+  head([['state_name', 'State'], ['cast', 'Ballots (corrected)'], ['feed', 'Feed count'], ['added', 'Added'], ['pop', 'Population'], ['elig', 'Eligible voters'], ['per', 'Per 100k eligible'], ['perPop', 'Per 100k residents'], ['voted', 'Voted so far'], ['notyet', 'Not yet'], ['share', '% of 2022 vote'], ['returned', 'Mail'], ['inperson', 'In person'], ['demShare', 'Reg. D'], ['repShare', 'Reg. R'], [null, 'Trend']],
+    'Click a column to sort. Per 100k = ballots per 100,000 people, so states of any size compare directly. Eligible = citizens 18+. "Not yet" includes people who will vote by Election Day. * = hand-corrected, ? = count looks wrong but has no confirmed replacement. Party = voters\' registration, only where the state reports it.');
+  const v = r => ({ feed: feed(r), added: r.cast - feed(r), share: share(r), per: per(r), perPop: perPop(r), pop: pop(r), elig: elig(r), voted: voted(r), notyet: 1 - voted(r), demShare: r.dem != null ? r.dem / r.cast : -1, repShare: r.rep != null ? r.rep / r.cast : -1 }[sortKey] ?? r[sortKey]);
+  const tb = document.getElementById('rows');
+  tb.innerHTML = sorted(states, v).map(r => `<tr data-s="${esc(r.state_name)}"><td><b>${esc(r.state_name)}</b>${r.note ? ' *' : r.flag ? ' ?' : ''}</td><td>${fmt(r.cast)}</td><td>${r.note ? fmt(feed(r)) : '—'}</td><td>${r.note ? '+' + fmt(r.cast - feed(r)) : '—'}</td>
+    <td>${fmt(pop(r))}</td><td>${fmt(elig(r))}</td><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rateColor(per(r))}"></span> <b>${fmt(per(r))}</b></td><td>${fmt(perPop(r))}</td><td>${pct1(voted(r))}</td><td>${pct1(1 - voted(r))}</td>
+    <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${evColor(share(r))}"></span> ${pct(share(r))}</td>
+    <td>${num(r.returned)}</td><td>${num(r.inperson)}</td><td>${r.dem != null ? pct(r.dem / r.cast) : '—'}</td><td>${r.rep != null ? pct(r.rep / r.cast) : '—'}</td>
+    <td style="width:90px">${r.series ? spark(r.series, 90, 20) : '—'}</td></tr>`).join('') +
+    Object.entries(POP).filter(([n]) => !EV.has(n)).map(([n, [p, e]]) => `<tr><td><b>${esc(n)}</b></td><td>not reporting</td><td>—</td><td>—</td><td>${fmt(p)}</td><td>${fmt(e)}</td><td colspan="10">—</td></tr>`).join('');
+  tb.querySelectorAll('tr[data-s]').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  const hand = states.filter(s => s.note).map(s => `<a href="${esc(s.source)}">${esc(s.state_name)}</a> (${esc(s.date)})`).join(', ');
+  document.getElementById('srcs').innerHTML = `Early vote: <a href="${esc(E.source)}">Who Shows Up</a> (compiled by civicAPI from state and county election offices, updated each morning)${hand ? `. Hand-entered: ${hand}` : ''}. Population: Census 2025 estimates. Eligible voters: Census CVAP, ACS 2020–2024.`;
+}
+
+function renderTable() {
+  head([['label', 'Race'], ['incumbent', 'Incumbent'], ['flip', 'Held → likely'], ['abs', 'Consensus'], ['spread', 'Disagreement'], ['pD', 'Market P(D)'], [null, 'Market leader']],
+    'Sorted by closest race. "Disagreement" = how far apart the sources are (std. dev. on a −3…+3 scale).');
+  const val = r => ({ abs: Math.abs(r.score ?? 9), pD: r.market?.pD ?? -1, flip: likely(r) === r.incParty ? 1 : 0 }[sortKey] ?? r[sortKey]);
+  const rows = sorted(races(), val);
+  const tb = document.getElementById('rows');
+  tb.innerHTML = rows.map(r => `<tr data-s="${esc(r.state)}">
+    <td><b>${esc(r.label)}</b></td><td>${esc(r.incumbent)} (${esc(r.incParty)})${r.note ? ` <span class="sub">${esc(r.note)}</span>` : ''}</td>
+    <td>${likely(r) === r.incParty ? `${tag(r.incParty)} hold` : `${tag(r.incParty)} → ${tag(likely(r))} <b>flip</b>`}</td>
+    <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color(r.score)}"></span> ${cat(r.score)[1]}</td>
+    <td>${r.spread >= 0.75 ? '<span class="warn">' + r.spread + '</span>' : r.spread}</td>
+    <td>${pct(r.market?.pD)}</td><td>${esc(r.market?.leader ?? '—')} ${r.market ? pct(r.market.leaderP) : ''}</td></tr>`).join('');
+  tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+}
+</script>
+</body>
+</html>

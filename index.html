@@ -197,7 +197,11 @@ let year = +hashYear || LIVE[office] || HOUSE_LATEST; // #president/1860 opens a
 const isPast = () => office === 'house' || office in LIVE && year !== LIVE[office];
 if (isPast()) sortKey = 'margin';
 const pastYears = o => o === 'house' ? Object.keys(HOUSE.national).map(Number).reverse() : o === 'president' ? [...PRESIDENT.years].reverse()
-  : [...new Set(Object.values(o === 'senate' ? SENATE : GOVERNOR).flatMap(x => Object.keys(x).map(y => parseInt(y))))].sort((a, b) => b - a);
+  : [...new Set([...Object.values(o === 'senate' ? SENATE : GOVERNOR).flatMap(x => Object.keys(x).map(y => parseInt(y))),
+      ...(o === 'senate' ? Object.keys(SENATE_SEATS.national).map(Number).filter(y => y < 1976) : [])])].sort((a, b) => b - a);
+// Seat-holding view: the House always; the Senate before 1976 (no popular-vote results here before then)
+const seatSrc = () => office === 'house' ? HOUSE : office === 'senate' && year < 1976 ? SENATE_SEATS : null;
+const chamber = () => office === 'house' ? 'House' : 'Senate';
 const yearSel = document.getElementById('year');
 yearSel.onchange = () => { year = +yearSel.value; sel = null; sortKey = isPast() ? 'margin' : 'abs'; sortDir = 1; render(); };
 function yearPicker() {
@@ -224,7 +228,7 @@ const partyColor = p => PARTY_COLOR[p] ?? PARTY_COLOR[ALIAS[p]] ?? d3.schemeTabl
 const SHORT = { D: 'Democratic', R: 'Republican', I: 'Independent', O: 'Independent' };
 function pastRows() { // one row per contest that year: {state, label, d, r, party, winner, margin}
   const yi = PRESIDENT.years.indexOf(year), rows = [];
-  if (office === 'house') return Object.entries(HOUSE.states).filter(([, y]) => y[year]).map(([st, y]) => {
+  if (seatSrc()) return Object.entries(seatSrc().states).filter(([, y]) => y[year]).map(([st, y]) => {
     const c = Object.entries(y[year]).sort((a, b) => b[1] - a[1]), total = d3.sum(c, x => x[1]);
     return { state: st, label: st, party: c.length > 1 && c[0][1] === c[1][1] ? 'Split' : c[0][0], winner: c.map(([p, n]) => `${p} ${n}`).join(' · '),
       d: y[year].Democratic ?? 0, r: y[year].Republican ?? 0, total };
@@ -254,37 +258,37 @@ function renderPast() {
   document.getElementById('legend').innerHTML = (byMargin
     ? CATS.map((c, i) => `<span><i style="background:${c[2]}"></i>${['D +12.5', 'D +7.5', 'D +2.5', 'Within 2.5', 'R +2.5', 'R +7.5', 'R +12.5'][i]}</span>`).join('') + parties.filter(p => !DR.has(p)).map(p => `<span><i style="background:${partyColor(p)}"></i>${esc(p)}</span>`).join('')
     : parties.map(p => `<span><i style="background:${partyColor(p)}"></i>${esc(p)}</span>`).join('')) +
-    `<span><i style="background:var(--none)"></i>${{ president: 'No electors', house: 'Not a state yet' }[office] ?? 'No race'}</span>`;
+    `<span><i style="background:var(--none)"></i>${{ president: 'No electors', house: 'Not a state yet' }[office] ?? (seatSrc() ? 'Not a state yet' : 'No race')}</span>`;
   d3.selectAll('path.st')
     .attr('fill', f => g.has(f.properties.name) ? rowColor(g.get(f.properties.name)[0]) : 'var(--none)')
     .classed('sel', f => f.properties.name === sel)
     .select('title').text(f => (g.get(f.properties.name) ?? [{ label: f.properties.name, party: null }])
       .map(r => `${r.label}: ${r.party ? `${r.party}${r.winner ? ' (' + r.winner + ')' : ''} ${r.margin != null ? signed(r.margin) : ''}` : 'no race'}`).join('\n'));
-  const won = office === 'house' ? Object.entries(HOUSE.national[year]).sort((a, b) => b[1] - a[1]) : d3.rollups(rows, v => v.length, r => r.party).sort((a, b) => b[1] - a[1]);
-  document.getElementById('seats').innerHTML = won.map(([p, n]) => `<div style="flex:${n};background:${partyColor(p)};color:#fff" title="${esc(p)}: ${n} ${office === 'house' ? 'seats' : 'states'}">${n}</div>`).join('');
+  const won = seatSrc() ? Object.entries(seatSrc().national[year]).sort((a, b) => b[1] - a[1]) : d3.rollups(rows, v => v.length, r => r.party).sort((a, b) => b[1] - a[1]);
+  document.getElementById('seats').innerHTML = won.map(([p, n]) => `<div style="flex:${n};background:${partyColor(p)};color:#fff" title="${esc(p)}: ${n} ${seatSrc() ? 'seats' : 'states'}">${n}</div>`).join('');
   const el = document.getElementById('detail'), mine = sel ? g.get(sel) : null;
-  if (mine) el.innerHTML = mine.map(r => `<h2 style="margin:0;font-size:18px">${esc(r.label)} · ${year} ${{ governor: 'Governor', senate: 'Senate', president: 'President', house: 'House delegation' }[office]}</h2>
-      <div style="margin:10px 0 2px;font-size:20px;font-weight:600;color:${rowColor(r)}">${esc(r.party)}${r.winner && office !== 'house' ? ' · ' + esc(r.winner) : ''}</div>
-      ${office === 'house' ? `<div class="sub">${r.total} seats: ${esc(r.winner)}</div>` : r.margin != null ? `<div class="sub">D ${pc(r.d)} · R ${pc(r.r)} · margin ${signed(r.margin)}</div>` : '<div class="sub">Party that carried the state. State vote shares are included from 1976 on.</div>'}`).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
+  if (mine) el.innerHTML = mine.map(r => `<h2 style="margin:0;font-size:18px">${esc(r.label)} · ${year} ${{ governor: 'Governor', senate: 'Senate', president: 'President', house: 'House delegation' }[office]}${seatSrc() && office === 'senate' ? ' seats' : ''}</h2>
+      <div style="margin:10px 0 2px;font-size:20px;font-weight:600;color:${rowColor(r)}">${esc(r.party)}${r.winner && !seatSrc() ? ' · ' + esc(r.winner) : ''}</div>
+      ${seatSrc() ? `<div class="sub">${r.total} seats: ${esc(r.winner)}</div>` : r.margin != null ? `<div class="sub">D ${pc(r.d)} · R ${pc(r.r)} · margin ${signed(r.margin)}</div>` : '<div class="sub">Party that carried the state. State vote shares are included from 1976 on.</div>'}`).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
   else if (office === 'president') {
     const e = PRESIDENT.list.find(x => x[0] === year), [w, ru] = e[2];
     const line = c => `<b>${esc(c[0])}</b> (${esc(c[1])}) · ${num(c[2])} electoral${c[3] ? ` · ${num(c[3])} votes (${pc(c[4])})` : ''}`;
     el.innerHTML = `<h2 style="margin:0;font-size:18px">${year} presidential election</h2><div style="margin:8px 0">Winner: ${line(w)}</div>${ru ? `<div class="sub">Runner-up: ${line(ru)}</div>` : ''}
       ${e[1] ? `<div class="sub">Turnout ${pc(e[1])} of eligible voters</div>` : ''}${PRES_NOTES[year] ? `<div class="warn">${esc(PRES_NOTES[year])}</div>` : ''}<p class="sub">Click a state for its result.</p>`;
-  } else if (office === 'house') {
+  } else if (seatSrc()) {
     const total = d3.sum(won, x => x[1]);
-    el.innerHTML = `<h2 style="margin:0;font-size:18px">House elected in ${year}</h2><div class="sub">${ordinal((year - 1788) / 2 + 1)} Congress, seated ${year + 1} · ${total} seats</div>
+    el.innerHTML = `<h2 style="margin:0;font-size:18px">${chamber()} ${office === 'house' ? 'elected in' : 'after'} ${year}</h2><div class="sub">${ordinal((year - 1788) / 2 + 1)} Congress, seated ${year + 1} · ${total} seats</div>
       <div style="margin:8px 0">${won.map(([p, n]) => `<b style="color:${partyColor(p)}">${esc(p)}</b> ${n}`).join(' · ')}</div>
-      <div class="sub">Majority: <b>${esc(won[0][0])}</b>${won[0][1] * 2 > total ? '' : ' (plurality only)'}</div><p class="sub">State colors show each delegation's majority party. Click a state for its delegation.</p>`;
+      <div class="sub">Majority: <b>${esc(won[0][0])}</b>${won[0][1] * 2 > total ? '' : ' (plurality only)'}</div><p class="sub">${office === 'house' ? "State colors show each delegation's majority party." : 'State colors show the party holding both seats; grey = one of each.' + (year < 1912 ? ' Senators were chosen by state legislatures until 1913.' : '')} Click a state for details.</p>`;
   } else el.innerHTML = `<h2 style="margin:0;font-size:18px">${year} ${office} elections</h2><div class="sub">${rows.length} races · ${won.map(([p, n]) => `${esc(p)} ${n}`).join(' · ')}</div><p class="sub">Click a state for its result.</p>`;
-  if (office === 'house') {
+  if (seatSrc()) {
     const dr = rows.some(r => r.d || r.r); // no D/R columns before those parties existed
-    head([['label', 'State'], ['party', 'Majority'], ['total', 'Seats'], ...(dr ? [['d', 'D seats'], ['r', 'R seats']] : []), [null, 'Delegation']], 'Each state\'s House delegation at the start of the Congress.');
+    head([['label', 'State'], ['party', 'Majority'], ['total', 'Seats'], ...(dr ? [['d', 'D seats'], ['r', 'R seats']] : []), [null, 'Delegation']], `Each state's ${chamber()} ${office === 'house' ? 'delegation' : 'seats'} at the start of the Congress.`);
     const tb = document.getElementById('rows');
     tb.innerHTML = sorted(rows, r => sortKey === 'margin' ? -r.total : r[sortKey] ?? '').map(r => `<tr data-s="${esc(r.state)}"><td><b>${esc(r.label)}</b></td><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rowColor(r)}"></span> ${esc(r.party)}</td>
       <td>${r.total}</td>${dr ? `<td>${r.d}</td><td>${r.r}</td>` : ''}<td class="sub">${esc(r.winner)}</td></tr>`).join('');
     tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
-    document.getElementById('srcs').innerHTML = 'Sources: <a href="https://voteview.com/data">Voteview</a> (UCLA) member data, every Congress since 1789. Polymarket odds for 2026 control are in the summary above.';
+    document.getElementById('srcs').innerHTML = 'Sources: <a href="https://voteview.com/data">Voteview</a> (UCLA) member data, every Congress since 1789.' + (office === 'senate' ? ' Senate election results from 1976 on are from MIT Election Lab.' : ' Polymarket odds for 2026 control are in the summary above.');
     return;
   }
   head([['label', 'State'], ['party', 'Won by'], ...(office === 'president' ? [] : [['winner', 'Winner']]), ['d', 'D %'], ['r', 'R %'], ['margin', 'Margin']],
@@ -296,7 +300,7 @@ function renderPast() {
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   document.getElementById('srcs').innerHTML = office === 'president'
     ? 'Sources: state results 1976–2024 from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>; which party carried each state before that from <a href="https://en.wikipedia.org/wiki/List_of_United_States_presidential_election_results_by_state">Wikipedia</a>; national totals from Wikipedia\'s yearly election pages.'
-    : `Sources: ${office === 'senate' ? '<a href="https://electionlab.mit.edu/data">MIT Election Lab</a>' : "Wikipedia's yearly gubernatorial election tables"}. History here starts in 1976.`;
+    : `Sources: ${office === 'senate' ? '<a href="https://electionlab.mit.edu/data">MIT Election Lab</a>. Before 1976 the Senate tab shows seat holdings from <a href="https://voteview.com/data">Voteview</a>.' : "Wikipedia's yearly gubernatorial election tables. History here starts in 1976."}`;
 }
 
 // Seats not on the ballot in 2026. Senate D includes the 2 independents who caucus with Democrats (King, Sanders).

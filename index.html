@@ -534,10 +534,27 @@ function presLine(full) {
     : `<div style="margin-bottom:4px">${head}</div>`;
 }
 
+function tug(o) { // election night tug of war: D pulls from the left, R from the right; the line in the middle is a majority
+  const code = { senate: 'S', house: 'H', governor: 'G' }[o], rows = R.races.filter(r => r.office === code), base = NOT_UP[o];
+  const k = s => rows.filter(r => r.called && rParty(r.winnerParty) === s).length, l = s => rows.filter(r => !r.called && rSide(r) === s).length;
+  const total = base.D + base.R + rows.length, need = Math.floor(total / 2) + 1, cd = base.D + k('D'), cr = base.R + k('R'), ld = l('D'), lr = l('R');
+  const prev = [...HR].reverse().find(h => new Date(h.t) <= new Date(R.updated) - 55 * 60e3)?.res[code]; // ~an hour earlier
+  const moved = prev ? [['D', k('D') - prev.D], ['R', k('R') - prev.R]].filter(([, n]) => n > 0).map(([p, n]) => `${tag(p)} +${n}`).join(' ') || 'no new calls' : '';
+  const seg = (n, c, t) => n > 0 ? `<div style="flex:${n};background:${c}" title="${t}: ${n}">${n / total > 0.04 ? n : ''}</div>` : '';
+  return `<div style="margin:8px 0 12px">
+    <div style="display:flex;justify-content:space-between;font-size:14px"><span>${tag('D')} <b style="font-size:18px">${cd}</b>${ld ? ` <span class="sub">+${ld} leading</span>` : ''}</span>
+      <span><b>${{ senate: 'Senate', house: 'House', governor: 'Governors' }[o]}</b> <span class="sub">${need} to win</span></span>
+      <span>${lr ? `<span class="sub">${lr} leading +</span> ` : ''}<b style="font-size:18px">${cr}</b> ${tag('R')}</span></div>
+    <div style="position:relative"><div class="seats" style="height:26px">${seg(cd, R_COLORS.calledD, 'Called or not up, D')}${seg(ld, R_COLORS.leadD, 'Leading D')}${seg(total - cd - cr - ld - lr, 'var(--none)', 'Not called, no lead')}${seg(lr, R_COLORS.leadR, 'Leading R')}${seg(cr, R_COLORS.calledR, 'Called or not up, R')}</div>
+      <div style="position:absolute;left:50%;top:-3px;bottom:-1px;border-left:2px solid var(--ink)"></div></div>
+    ${moved ? `<div class="sub" style="text-align:center">Called in the last hour: ${moved}</div>` : ''}</div>`;
+}
 function renderFlow() { // the 2026 outlook: just the open office on its own tab, a one-line-each overview elsewhere, hidden for past years
   const el = document.getElementById('flow');
   el.hidden = isPast() || office === 'states' || office === 'history';
   if (el.hidden) return;
+  const live = R?.races?.length && R.races.some(r => r.votes) ? `<div class="sub">Election night · tug of war · dark = called (incl. seats not up), light = leading · updated ${new Date(R.updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>${['senate', 'house', 'governor'].map(tug).join('')}` : '';
+  if (live && office !== 'president') return el.innerHTML = live;
   if (office === 'president') return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2028 outlook (markets only; forecasters haven't rated 2028 yet)</div>${presLine(true)}`;
   if (office in NOT_UP) return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2026 outlook: who holds power now, and who's favored in each race (consensus of forecasters and Polymarket)</div>${chamberLine(office, true)}`;
   el.innerHTML = `<div class="sub" style="margin-bottom:6px">2026 outlook</div>${chamberLine('senate')}${chamberLine('house')}${chamberLine('governor')}${presLine()}`;

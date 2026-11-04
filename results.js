@@ -45,8 +45,9 @@ async function state(name) {
   if (!res.ok) throw new Error(`${res.status} ${name}`);
   const j = await res.json();
   const old = collect(j, []).filter(r => String(r.election_date) === DAY).map(r => race(r, name));
-  if (!old.length && !j.stateRaceResults) throw new Error(`no results section: ${name}`); // NBC sometimes serves a partial page under load
-  return old.length ? old : fromGeneral(j.stateRaceResults, name);
+  const out = old.length ? old : fromGeneral(j.stateRaceResults, name);
+  if (!out.length && name !== 'District of Columbia') throw new Error(`no races: ${name}`); // NBC sometimes serves a partial page under load; every state has a House race
+  return out;
 }
 
 async function main() {

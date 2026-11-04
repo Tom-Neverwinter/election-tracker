@@ -25,4 +25,9 @@ if (require('child_process').spawnSync('git', ['diff', '--cached', '--quiet'], {
   run('git', ['pull', '-q', '--rebase']);
   log('push: ' + (run('git', ['push', '-q']) ?? 'FAILED'));
 }
+const res = load('results-data.js', 'window.RESULTS = '), races = (res?.races ?? []).filter(r => 'SGH'.includes(r.office));
+if (races.length >= 506 && !res.failed?.length && races.every(r => r.called)) { // 35 S + 36 G + 435 H, all called: we're done
+  log('all races called; removing the scheduled task');
+  run('powershell', ['-NoProfile', '-Command', 'Unregister-ScheduledTask ElectionTrackerHourly -Confirm:$false']);
+}
 log(`done ${stamp}`);

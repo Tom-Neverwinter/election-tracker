@@ -45,14 +45,23 @@ async function state(name) {
   if (!res.ok) throw new Error(`${res.status} ${name}`);
   const j = await res.json();
   const old = collect(j, []).filter(r => String(r.election_date) === DAY).map(r => race(r, name));
+  if (!old.length && !j.stateRaceResults) throw new Error(`no results section: ${name}`); // NBC sometimes serves a partial page under load
   return old.length ? old : fromGeneral(j.stateRaceResults, name);
 }
 
 async function main() {
-  const races = [], failed = [];
-  for (let i = 0; i < STATES.length; i += 6) // 6 states at a time
-    for (const [k, p] of (await Promise.allSettled(STATES.slice(i, i + 6).map(state))).entries())
-      p.status === 'fulfilled' ? races.push(...p.value) : failed.push(STATES[i + k]);
+  const races = [];
+  let failed = STATES;
+  for (let attempt = 0; attempt < 3 && failed.length; attempt++) { // retry failed states up to twice
+    const todo = failed; failed = [];
+    for (let i = 0; i < todo.length; i += 6) // 6 states at a time
+      for (const [k, p] of (await Promise.allSettled(todo.slice(i, i + 6).map(state))).entries())
+        p.status === 'fulfilled' ? races.push(...p.value) : failed.push(todo[i + k]);
+  }
+  if (failed.length) { // keep the last good numbers for states that still failed
+    try { const prev = JSON.parse(fs.readFileSync(path.join(__dirname, 'results-data.js'), 'utf8').trim().replace(/;$/, '').slice('window.RESULTS = '.length));
+      races.push(...(prev?.races ?? []).filter(r => failed.includes(r.state))); } catch {}
+  }
   const out = { updated: new Date().toISOString(), day: DAY, races, failed };
   fs.writeFileSync(path.join(__dirname, 'results-data.js'), 'window.RESULTS = ' + JSON.stringify(out) + ';\n');
   const n = o => races.filter(r => r.office === o), c = o => n(o).filter(r => r.called).length;

@@ -257,7 +257,7 @@ function renderResults() {
 // ---- Measures tab: 2026 statewide ballot measures (measures.js), with NBC results where results.js found them ----
 const MEAS = window.MEASURES ?? [];
 const measColor = d3.scaleSequential([-4, 14], d3.interpolatePurples).clamp(true); // start below 0 so 1-measure states aren't near-white
-const propResults = st => (R?.races ?? []).filter(r => r.state === st && !RKIND[r.office]); // anything that isn't Senate/Governor/House
+const propResults = st => (R?.races ?? []).filter(r => (st == null || r.state === st) && !RKIND[r.office]); // null = all states; anything that isn't Senate/Governor/House
 const PASTM = window.MEASURES_PAST ?? []; // past years: {year, state, name, desc, topic, result, yes, source}
 const MEAS_NOW = 2026;
 const measYears = () => [...new Set(PASTM.map(m => m.year))].sort((a, b) => b - a);
@@ -276,15 +276,16 @@ function renderMeasures() {
   const all = list.length, p = passed(list);
   document.getElementById('seats').innerHTML = now || !all ? '' : `<div style="flex:${p};background:${passColor(1)};color:#fff" title="Passed: ${p}">${p} passed</div><div style="flex:${all - p};background:${passColor(0)};color:#fff" title="Failed: ${all - p}">${all - p} failed</div>`;
   const badge = m => m.result ? ` <b style="color:${m.result === 'Passed' ? '#2f9e44' : '#e03131'}">${m.result}${m.yes != null ? ` ${m.yes}%` : ''}</b>` : '';
-  const res = r => { const y = r.cands.find(c => /^yes/i.test(c.name)), n = r.cands.find(c => /^no/i.test(c.name));
-    return `${esc(r.name)}: ${y ? `Yes ${y.pct}%` : ''}${n ? ` · No ${n.pct}%` : ''} · ${Math.round(r.pctIn ?? 0)}% in${r.called ? ` · <b>${esc(r.winner ?? 'called')}</b>` : ''}`; };
+  const res = r => { const y = r.cands.find(c => /^(yes|for)\b/i.test(c.name)), n = r.cands.find(c => /^(no|against)\b/i.test(c.name));
+    return `${esc(r.name)}: ${y ? `${esc(y.name)} ${y.pct}%` : ''}${n ? ` · ${esc(n.name)} ${n.pct}%` : ''} ·${Math.round(r.pctIn ?? 0)}% in${r.called ? ` · <b>${esc(r.winner ?? 'called')}</b>` : ''}`; };
   const mine = sel && g.get(sel);
   if (mine) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(sel)} · ${year}: ${mine.length} measure${mine.length > 1 ? 's' : ''}${now ? '' : `, ${passed(mine)} passed`}</h2>` +
     mine.map(m => `<div style="margin-top:10px"><b>${esc(m.name)}</b>${badge(m)} <span class="pill" style="padding:1px 6px;font-size:11px">${esc(m.topic)}</span><div class="sub">${esc(m.summary ?? m.desc ?? '')} <a href="${esc(m.source)}" target="_blank" rel="noopener">source</a></div></div>`).join('') +
     (now && propResults(sel).length ? `<div style="margin-top:12px"><b>Results</b>${propResults(sel).map(r => `<div class="sub">${res(r)}</div>`).join('')}</div>` : '') +
     (PASTM.some(m => m.state === sel) ? `<div class="sub" style="margin-top:12px">${esc(sel)} all years on record: ${PASTM.filter(m => m.state === sel).length} measures, ${passed(PASTM.filter(m => m.state === sel))} passed, since ${d3.min(PASTM.filter(m => m.state === sel), m => m.year)}.</div>` : '');
   else el.innerHTML = `<h2 style="margin:0;font-size:18px">${year} ballot measures</h2><div class="sub">${all} statewide measures in ${g.size} states${now ? '' : ` · ${p} passed, ${all - p} failed`}</div>
-    <div style="margin:8px 0">${topics.map(([t, n]) => `${esc(t)} ${n}`).join(' · ')}</div><p class="sub">Click a state for its measures.${now ? ' Results appear on election night once results.js has run.' : ''}</p>`;
+    <div style="margin:8px 0">${topics.map(([t, n]) => `${esc(t)} ${n}`).join(' · ')}</div><p class="sub">Click a state for its measures.</p>${now && R ? (live => `<b>Results so far</b> <span class="sub">(${live.length} of ${propResults(null).length} reporting, updated ${new Date(R.updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})</span>` +
+      (live.sort((a, b) => b.pctIn - a.pctIn).map(r => `<div class="sub"><b>${esc(r.state)}</b> ${res(r)}</div>`).join('') || '<div class="sub">No votes counted yet.</div>'))(propResults(null).filter(r => r.votes)) : ''}`;
   head([['state', 'State'], ['name', 'Measure'], ['topic', 'Topic'], ...(now ? [] : [['result', 'Result'], ['yes', 'Yes %']]), [null, now ? 'What a yes vote does' : 'Subject']],
     now ? 'Every statewide measure on the Nov 3 ballot. Click a column to sort.' : `Statewide measures voted on in ${year}. Click a column to sort.`);
   const tb = document.getElementById('rows');

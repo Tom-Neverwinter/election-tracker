@@ -30,13 +30,14 @@ function general(r, state, office) {
     .sort((a, b) => b.votes - a.votes);
   const win = cands.find(c => c.won);
   cands.forEach(c => delete c.won);
-  return { id: r.raceId ?? `${state}~${office}~${r.district ?? r.name}`, state, office, district: office === 'H' ? r.district ?? 0 : null, name: r.officeName || r.headlineText || r.name,
+  return { id: r.raceId ?? `${state}~${office}~${r.district ?? r.name}`, state, office, district: office === 'H' ? r.district ?? 0 : null, name: (office === 'O' && r.raceName) || r.officeName || r.headlineText || r.name, // raceName says which city for mayors
     pctIn: r.percentIn ?? null, votes: +r.votes || 0, called: !!win, winner: win?.name ?? null, winnerParty: win?.party ?? null, cands: cands.slice(0, 4) };
 }
 const fromGeneral = (s, name) => !s ? [] : [
   ...(s.discreteOffices ?? []).map(r => general(r, name, r.officeCode)),
   ...(s.house ?? []).map(r => ({ ...general(r, name, 'H'), ...(s.house.length === 1 && { district: 0 }) })), // lone seat = at-large
   ...(s.ballotProps ?? []).map(r => general(r, name, r.officeCode || 'I')),
+  ...(s.otherRaces ?? []).map(r => general(r, name, 'O')), // attorney general, secretary of state, lt. governor, mayors...
 ];
 
 async function state(name) {

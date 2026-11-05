@@ -205,7 +205,7 @@ function render() {
 
 // ---- Results tab: election night, from results-data.js (written by `node results.js`) ----
 const R = window.RESULTS;
-const RKIND = { S: ['senate', 'Senate'], H: ['house', 'House'], G: ['governor', 'Governor'] };
+const RKIND = { S: ['senate', 'Senate'], H: ['house', 'House'], G: ['governor', 'Governor'], O: ['other', 'Other statewide'] }; // O = attorney general, secretary of state, lt. governor...
 let rkind = 'S';
 const rmodes = document.getElementById('rmodes');
 rmodes.innerHTML = Object.entries(RKIND).map(([k, [, l]]) => `<button data-r="${k}">${l}</button>`).join('');
@@ -215,7 +215,7 @@ const rLead = r => r.cands[0] && r.cands[0].votes > 0 ? r.cands[0] : null;
 const rSide = r => rParty(r.called ? r.winnerParty : rLead(r)?.party); // D, R, O or null (no votes yet)
 const R_COLORS = { calledD: '#1c4e8f', leadD: '#9ec3ea', leadR: '#f0a8a8', calledR: '#a02626', calledO: '#9b6bcc', leadO: '#cdb4e6' };
 const rColor = r => { const s = rSide(r); return s ? R_COLORS[(r.called ? 'called' : 'lead') + s] : 'var(--none)'; };
-const rLabel = r => r.district != null ? `${r.state} ${r.district || 'at-large'}` : r.state;
+const rLabel = r => r.office === 'O' ? `${r.state} ${r.name}` : r.district != null ? `${r.state} ${r.district || 'at-large'}` : r.state;
 const forecastFor = r => (D[RKIND[r.office][0]]?.races ?? []).find(f => f.state === r.state && (r.office !== 'H' || f.label.endsWith('-' + (r.district || 'AL')))); // ponytail: Senate specials share a state; the first forecast row wins
 function renderResults() {
   document.querySelectorAll('#rmodes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.r === rkind));
@@ -236,14 +236,14 @@ function renderResults() {
     <div style="height:6px;background:var(--line);border-radius:3px;margin:2px 0 6px"><div style="height:6px;width:${Math.min(100, c.pct)}%;background:${R_COLORS['called' + (rParty(c.party) ?? 'O')] ?? R_COLORS.calledO};border-radius:3px"></div></div>`;
   if (!R) el.innerHTML = '<div class="sub">No results yet. They appear here once polls close and results are pulled (node results.js).</div>';
   else if (mine) el.innerHTML = mine.map(r => { const fc = forecastFor(r);
-    return `<h2 style="margin:0;font-size:18px">${esc(rLabel(r))} ${RKIND[r.office][1]}</h2>
+    return `<h2 style="margin:0;font-size:18px">${esc(rLabel(r))} ${r.office === 'O' ? '' : RKIND[r.office][1]}</h2>
       <div class="sub">${Math.round(r.pctIn ?? 0)}% of expected vote in · ${fmt(r.votes)} votes${r.called ? ` · <b>called for ${esc(r.winner)}</b>` : ''}</div>
       <div style="margin-top:8px">${r.cands.map(bar).join('')}</div>
       ${fc ? `<div class="sub">Forecast: ${cat(fc.score)[1]}${fc.market?.pD != null ? ` · market P(D) ${pct(fc.market.pD)}` : ''}</div>` : ''}`; }).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
   else { const base = NOT_UP[RKIND[rkind][0]] ?? { D: 0, R: 0 };
     el.innerHTML = `<h2 style="margin:0;font-size:18px">${RKIND[rkind][1]} results</h2>
       <div class="sub">Updated ${new Date(R.updated).toLocaleString()} · ${rows.length} races · ${rows.filter(r => r.called).length} called${R.failed?.length ? ` · couldn't load ${R.failed.length} states` : ''}</div>
-      <div style="margin:8px 0">Seats so far (not up + called): ${tag('D')} ${base.D + k('D')} – ${tag('R')} ${base.R + k('R')}${k('O') ? ` – other ${k('O')}` : ''} · leading: ${tag('D')} ${l('D')} – ${tag('R')} ${l('R')}</div>
+      <div style="margin:8px 0">${rkind === 'O' ? 'Called so far:' : 'Seats so far (not up + called):'} ${tag('D')} ${base.D + k('D')} – ${tag('R')} ${base.R + k('R')}${k('O') ? ` – other ${k('O')}` : ''} · leading: ${tag('D')} ${l('D')} – ${tag('R')} ${l('R')}</div>
       <p class="sub">Click a state for vote counts. Results from NBC News / Associated Press.</p>`; }
   head([['label', 'Race'], ['in', '% in'], ['lead', 'Leader'], ['margin', 'Margin'], ['status', 'Status'], [null, 'Forecast']], 'Closest races first. Margin = leader minus runner-up, in points.');
   const rowsT = rows.map(r => ({ ...r, label: rLabel(r), in: r.pctIn ?? 0, lead: rLead(r)?.name ?? '', margin: r.cands.length > 1 ? r.cands[0].pct - r.cands[1].pct : 100, status: r.called ? 'Called' : rLead(r) ? 'Counting' : 'No votes', fc: forecastFor(r) }));

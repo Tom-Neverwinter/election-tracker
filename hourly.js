@@ -12,6 +12,7 @@ const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate
 log(`start ${stamp}`);
 log('snapshot: ' + run(process.execPath, ['snapshot.js']));
 log('results: ' + run(process.execPath, ['results.js']));
+log('measures: ' + run(process.execPath, ['measures-results.js']));
 
 const history = load('history.js', 'window.HISTORY = ');
 const day = now.toLocaleDateString('en-CA');
@@ -19,7 +20,7 @@ fs.mkdirSync(path.join(dir, 'hourly'), { recursive: true });
 fs.writeFileSync(path.join(dir, 'hourly', stamp + '.json'), JSON.stringify({ captured: now.toISOString(), data: history?.[day] ?? null, results: load('results-data.js', 'window.RESULTS = ') }));
 
 try { require('./hourly-index.js').build(); } catch (e) { log('index failed: ' + e.message); }
-run('git', ['add', 'history.js', 'results-data.js', 'hourly']);
+run('git', ['add', 'history.js', 'results-data.js', 'measures-results-data.js', 'hourly']);
 if (require('child_process').spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: dir }).status === 1) { // 1 = something staged
   run('git', ['commit', '-q', '-m', `hourly ${stamp}`]);
   run('git', ['pull', '-q', '--rebase']);

@@ -86,6 +86,7 @@
 <script src="past/control.js"></script>
 <script src="results-data.js"></script>
 <script src="measures.js"></script>
+<script src="measures-results-data.js"></script>
 <script src="past/measures.js"></script>
 <script src="hourly/index.js"></script>
 <script type="module">
@@ -255,7 +256,7 @@ function renderResults() {
 }
 
 // ---- Measures tab: 2026 statewide ballot measures (measures.js), with NBC results where results.js found them ----
-const MEAS = window.MEASURES ?? [];
+const MEAS = (window.MEASURES ?? []).map(m => ({ ...m, ...window.MEASURES_RESULTS?.[m.state + '|' + m.name] })); // + Nov 3 results from measures-results.js
 const measColor = d3.scaleSequential([-4, 14], d3.interpolatePurples).clamp(true); // start below 0 so 1-measure states aren't near-white
 const propResults = st => (R?.races ?? []).filter(r => (st == null || r.state === st) && !RKIND[r.office]); // null = all states; anything that isn't Senate/Governor/House
 const PASTM = window.MEASURES_PAST ?? []; // past years: {year, state, name, desc, topic, result, yes, source}
@@ -286,11 +287,12 @@ function renderMeasures() {
   else el.innerHTML = `<h2 style="margin:0;font-size:18px">${year} ballot measures</h2><div class="sub">${all} statewide measures in ${g.size} states${now ? '' : ` · ${p} passed, ${all - p} failed`}</div>
     <div style="margin:8px 0">${topics.map(([t, n]) => `${esc(t)} ${n}`).join(' · ')}</div><p class="sub">Click a state for its measures.</p>${now && R ? (live => `<b>Results so far</b> <span class="sub">(${live.length} of ${propResults(null).length} reporting, updated ${new Date(R.updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})</span>` +
       (live.sort((a, b) => b.pctIn - a.pctIn).map(r => `<div class="sub"><b>${esc(r.state)}</b> ${res(r)}</div>`).join('') || '<div class="sub">No votes counted yet.</div>'))(propResults(null).filter(r => r.votes)) : ''}`;
-  head([['state', 'State'], ['name', 'Measure'], ['topic', 'Topic'], ...(now ? [] : [['result', 'Result'], ['yes', 'Yes %']]), [null, now ? 'What a yes vote does' : 'Subject']],
+  const cols = !now || list.some(m => m.result); // result columns once any 2026 result is in
+  head([['state', 'State'], ['name', 'Measure'], ['topic', 'Topic'], ...(!cols ? [] : [['result', 'Result'], ['yes', 'Yes %']]), [null, now ? 'What a yes vote does' : 'Subject']],
     now ? 'Every statewide measure on the Nov 3 ballot. Click a column to sort.' : `Statewide measures voted on in ${year}. Click a column to sort.`);
   const tb = document.getElementById('rows');
   tb.innerHTML = sorted(list, m => sortKey === 'abs' ? m.state + m.name : m[sortKey] ?? '').map(m => `<tr data-s="${esc(m.state)}"><td><b>${esc(m.state)}</b></td><td>${esc(m.name)}</td><td>${esc(m.topic)}</td>
-    ${now ? '' : `<td>${badge(m).replace(/ [\d.]+%/, '')}</td><td>${m.yes != null ? m.yes + '%' : '—'}</td>`}<td class="sub">${esc(m.summary ?? m.desc ?? '')}</td></tr>`).join('');
+    ${!cols ? '' : `<td>${badge(m).replace(/ [\d.]+%/, '') || '<span class="sub">Pending</span>'}</td><td>${m.yes != null ? m.yes + '%' : '—'}</td>`}<td class="sub">${esc(m.summary ?? m.desc ?? '')}</td></tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   document.getElementById('srcs').innerHTML = now
     ? 'Sources: Wikipedia, <a href="https://en.wikipedia.org/wiki/2026_United_States_ballot_measures">2026 United States ballot measures</a> and each measure\'s page; summaries written for this site. Ballotpedia counts 145 measures; one is missing here.'

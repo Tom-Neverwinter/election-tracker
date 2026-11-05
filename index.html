@@ -89,6 +89,7 @@
 <script src="results-data.js"></script>
 <script src="measures.js"></script>
 <script src="measures-results-data.js"></script>
+<script src="legislature-results-data.js"></script>
 <script src="past/measures.js"></script>
 <script src="hourly/index.js"></script>
 <script type="module">
@@ -394,6 +395,11 @@ function renderTimeline() {
 
 // ---- States tab: who controls each state government (past/control.js) ----
 const CTRL = window.CONTROL ?? {};
+// 2027 = 2026 control updated with Nov 3 results so far: called governors (results-data.js) and chambers Wikipedia has posted (legislature-results-data.js).
+// ponytail: anything not yet called keeps its 2026 holder; the note under the heading says how many are pending.
+const LEG = window.LEG_RESULTS ?? { states: {}, pending: 0 }, GOV_PENDING = (window.RESULTS?.races ?? []).filter(r => r.office === 'G' && !r.called).length;
+for (const [s, y] of Object.entries(CTRL)) if (y[2026]) { const g = window.RESULTS?.races?.find(r => r.office === 'G' && r.state === s && r.called), l = LEG.states[s] ?? {};
+  y[2027] = [g?.winnerParty ?? y[2026][0], l.up ?? y[2026][1], l.lo ?? y[2026][2]]; }
 const CTRL_LATEST = Math.max(...Object.values(CTRL).flatMap(s => Object.keys(s).map(Number)));
 const ctrlYears = () => [...new Set(Object.values(CTRL).flatMap(s => Object.keys(s).map(Number)))].sort((a, b) => b - a);
 function ctrlStatus([gov, up, lo]) { // trifecta = one party holds the governorship and both chambers
@@ -417,7 +423,7 @@ function renderStates() {
   if (r) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(r.state)} · ${year}</h2><div style="margin:8px 0;font-size:18px;color:${ctrlColor(r.st)}">${esc(r.status)}</div>
     <div>Governor: ${cell(r.gov)}</div><div>Upper chamber: ${cell(r.up)}</div><div>Lower chamber: ${cell(r.lo)}</div>
     <div class="sub" style="margin-top:8px">Trifectas over time: ${Object.entries(CTRL[r.state]).filter(([, v]) => ctrlStatus(v).key === 'tri').length} of ${Object.keys(CTRL[r.state]).length} years listed.</div>`;
-  else el.innerHTML = `<h2 style="margin:0;font-size:18px">State government control, ${year}</h2><div class="sub">${rows.length} states with data</div>
+  else el.innerHTML = `<h2 style="margin:0;font-size:18px">State government control, ${year}</h2><div class="sub">${rows.length} states with data${year === 2027 ? ` · after the Nov 3, 2026 election, from results so far. Still pending: ${GOV_PENDING} governor races, ${LEG.pending} legislative chambers (these keep their 2026 control until called).` : ''}</div>
     <div style="margin:8px 0">${tally.map(([l, n]) => `${esc(l)} ${n}`).join(' · ')}</div><p class="sub">A trifecta is one party holding the governorship and both legislative chambers. Click a state for details.</p>`;
   head([['state', 'State'], ['status', 'Control'], ['gov', 'Governor'], ['up', 'Upper chamber'], ['lo', 'Lower chamber']], 'Majority party in each chamber, by seats; "Split" = tied.');
   const tb = document.getElementById('rows');

@@ -60,6 +60,7 @@
       <div class="modes" id="rmodes" role="group" aria-label="Results for" style="margin-bottom:8px" hidden></div>
       <div class="modes" id="modes" role="group" aria-label="Color the map by" style="margin-bottom:8px" hidden></div>
       <svg id="map" viewBox="0 0 975 610" role="img" aria-label="US map colored by consensus rating"></svg>
+      <div id="scrub" hidden></div>
       <div class="seats" id="seats"></div>
       <div class="legend" id="legend"></div>
     </div>
@@ -181,6 +182,8 @@ function render() {
   document.getElementById('modes').hidden = office !== 'early';
   document.getElementById('hmodes').hidden = office !== 'history';
   document.getElementById('rmodes').hidden = office !== 'results';
+  document.getElementById('scrub').hidden = office !== 'timeline';
+  if (office !== 'timeline') clearInterval(tPlay);
   renderFlow();
   if (office === 'early') return renderEarly();
   if (office === 'history') return renderHistory();
@@ -319,16 +322,40 @@ function tchart(title, series, { fmt = v => v, lo, hi, ref } = {}) { // small mu
 }
 const hrSeries = (get, name, color) => ({ name, color, pts: HR.map(h => [new Date(h.t), get(h)]).filter(p => p[1] != null) });
 const raceTrail = key => HR.map(h => h.race?.[key]).filter(v => v != null); // one race's market P(D), hour by hour
+let tIdx = null, tKind = 'S', tPlay = null; // Timeline map scrubber: which capture and office the map shows
+const tOdds = d3.scaleDiverging([0, 0.5, 1], t => d3.interpolateRdBu(t)); // market P(D): red → blue
+function paintTimeline() { // color the map as of capture tIdx: called/leading from results, else that hour's market odds
+  const h = HR[tIdx], base = NOT_UP[{ S: 'senate', G: 'governor' }[tKind]];
+  const at = n => { const c = h.call?.[`${tKind}:${n}`], p = h.race[`${tKind}:${n}`] ?? h.race[`${tKind}:${n} (special)`];
+    return c ? [R_COLORS[(c === c.toUpperCase() ? 'called' : 'lead') + c.toUpperCase()], `${c === c.toUpperCase() ? 'called' : 'leading'} ${c.toUpperCase()}`]
+      : p != null ? [tOdds(p), `market P(D) ${pct(p)}`] : null; };
+  d3.selectAll('path.st').attr('fill', f => at(f.properties.name)?.[0] ?? 'var(--none)').classed('sel', false)
+    .select('title').text(f => { const a = at(f.properties.name); return `${f.properties.name}${a ? ': ' + a[1] : ''}`; });
+  document.querySelectorAll('#scrub [data-k]').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === tKind));
+  document.getElementById('tslide').value = tIdx;
+  const r = h.res[tKind];
+  document.getElementById('tlabel').innerHTML = `<b>${new Date(h.t).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</b> · capture ${tIdx + 1} of ${HR.length}`
+    + (r ? ` · ${{ S: 'Senate', G: 'Governors' }[tKind]} called: ${tag('D')} ${base.D + r.D} – ${tag('R')} ${base.R + r.R} (${r.called}/${r.n} races)` : ' · no votes counted yet');
+}
 function renderTimeline() {
   const el = document.getElementById('detail'), first = HR[0], last = HR.at(-1);
   const v0 = k => HR.find(h => h.race[k] != null)?.race[k], v1 = k => HR.findLast(h => h.race[k] != null)?.race[k]; // first and last odds seen (markets close once a race is called)
   const delta = k => v0(k) != null && v1(k) != null ? v1(k) - v0(k) : null;
-  const shift = d3.scaleDiverging([-0.2, 0, 0.2], t => d3.interpolateRdBu(t)).clamp(true); // blue = moved toward D
-  document.getElementById('legend').innerHTML = [[-0.2, 'Toward R 20+ pts'], [-0.05, '5'], [0, 'No change'], [0.05, '5'], [0.2, 'Toward D 20+ pts']]
-    .map(([v, l]) => `<span><i style="background:${shift(v)}"></i>${l}</span>`).join('') + '<span><i style="background:var(--none)"></i>No Senate market</span> <span>Senate market move since first capture</span>';
-  d3.selectAll('path.st').attr('fill', f => { const v = delta('S:' + f.properties.name); return v == null ? 'var(--none)' : shift(v); }).classed('sel', false)
-    .select('title').text(f => { const k = 'S:' + f.properties.name, v = delta(k); return v == null ? f.properties.name : `${f.properties.name} Senate: P(D) ${pct(v0(k))} → ${pct(v1(k))}`; });
+  document.getElementById('legend').innerHTML = [['calledD', 'Called D'], ['leadD', 'Leading D'], ['leadR', 'Leading R'], ['calledR', 'Called R']].map(([k, l]) => `<span><i style="background:${R_COLORS[k]}"></i>${l}</span>`).join('')
+    + `<span><i style="background:linear-gradient(90deg,${tOdds(0)},${tOdds(0.5)},${tOdds(1)})"></i>Before votes: market odds R → D</span><span><i style="background:var(--none)"></i>No race</span>`;
   document.getElementById('seats').innerHTML = '';
+  if (HR.length) { if (tIdx == null || tIdx >= HR.length) tIdx = HR.length - 1;
+    const sc = document.getElementById('scrub');
+    sc.innerHTML = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0">
+      <div class="modes" role="group" aria-label="Map shows"><button data-k="S">Senate</button><button data-k="G">Governor</button></div>
+      <button id="tplay" class="pill" aria-label="Play">▶</button>
+      <input type="range" id="tslide" min="0" max="${HR.length - 1}" value="${tIdx}" style="flex:1;min-width:160px" aria-label="Capture time"></div>
+      <div class="sub" id="tlabel" style="margin-bottom:4px"></div>`;
+    sc.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { tKind = b.dataset.k; paintTimeline(); });
+    sc.querySelector('#tslide').oninput = e => { clearInterval(tPlay); tIdx = +e.target.value; paintTimeline(); };
+    sc.querySelector('#tplay').onclick = () => { clearInterval(tPlay); if (tIdx >= HR.length - 1) tIdx = 0;
+      tPlay = setInterval(() => { if (++tIdx >= HR.length - 1) clearInterval(tPlay); paintTimeline(); }, 250); };
+    paintTimeline(); }
   const NAMES = { S: 'Senate', G: 'Governor', P: 'President 2028' };
   const movers = last ? [...new Set(HR.flatMap(h => Object.keys(h.race)))].map(k => [k, delta(k)]).filter(([, v]) => v != null && Math.abs(v) >= 0.005).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 10) : [];
   el.innerHTML = !HR.length ? '<div class="sub">No hourly captures yet.</div>' : `<h2 style="margin:0;font-size:18px">Hour by hour</h2>

@@ -15,8 +15,11 @@ function summarize(cap) {
     return c; };
   const race = {};
   for (const [o, k] of [['senate', 'S'], ['governor', 'G'], ['president', 'P']]) for (const r of d[o]?.races ?? []) if (r.market?.pD != null) race[`${k}:${r.label}`] = r3(r.market.pD);
+  const call = {}; // "S:Georgia": "D" called / "d" leading (for the Timeline map scrubber)
+  for (const r of res) { const k = `${r.office}:${r.state}`;
+    if ((r.office === 'S' || r.office === 'G') && !call[k] && (r.called || r.votes)) { const p = r.called ? r.winnerParty : r.cands[0]?.party, s = /^dem/i.test(p) ? 'D' : /^rep/i.test(p) ? 'R' : 'O'; call[k] = r.called ? s : s.toLowerCase(); } }
   return {
-    t: cap.captured,
+    t: cap.captured, call,
     mkt: { S: r3(d.control?.Senate?.['Democratic Party']), H: r3(d.control?.House?.['Democratic Party']), P: r3(d.president?.party?.Democratic) },
     seats: { S: seats('senate'), H: seats('house'), G: seats('governor') },
     early: d.early ? d.early.states.reduce((a, s) => a + s.cast, 0) : null,

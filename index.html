@@ -324,30 +324,41 @@ const hrSeries = (get, name, color) => ({ name, color, pts: HR.map(h => [new Dat
 const raceTrail = key => HR.map(h => h.race?.[key]).filter(v => v != null); // one race's market P(D), hour by hour
 let tIdx = null, tKind = 'S', tPlay = null; // Timeline map scrubber: which capture and office the map shows
 const tOdds = d3.scaleDiverging([0, 0.5, 1], t => d3.interpolateRdBu(t)); // market P(D): red → blue
-function paintTimeline() { // color the map as of capture tIdx: called/leading from results, else that hour's market odds
-  const h = HR[tIdx], base = NOT_UP[{ S: 'senate', G: 'governor' }[tKind]];
-  const at = n => { const c = h.call?.[`${tKind}:${n}`], p = h.race[`${tKind}:${n}`] ?? h.race[`${tKind}:${n} (special)`];
+const TKINDS = { P: 'President 2028', S: 'Senate', H: 'House', G: 'Governor', E: 'Early vote' };
+const oddsLegend = `<span><i style="background:linear-gradient(90deg,${tOdds(0)},${tOdds(0.5)},${tOdds(1)})"></i>Market odds R → D</span>`;
+const resLegend = [['calledD', 'Called D'], ['leadD', 'Leading D'], ['leadR', 'Leading R'], ['calledR', 'Called R']].map(([k, l]) => `<span><i style="background:${R_COLORS[k]}"></i>${l}</span>`).join('');
+function paintTimeline() { // color the map as of capture tIdx, for the office picked in the scrubber
+  const h = HR[tIdx], base = NOT_UP[{ S: 'senate', G: 'governor', H: 'house' }[tKind]];
+  const at = n => { // [fill, hover text] for state n, or null
+    if (tKind === 'E') { const c = h.ev?.[n], v = c && EV.has(n) ? MODES.share.val({ ...EV.get(n), cast: c }) : null; return v == null ? null : [evColor(v), `${fmt(c)} early votes, ${pct(v)} of the 2022 vote`]; }
+    if (tKind === 'H') { const s = h.hs?.[n]; if (!s) return null; const d = s[0] + s[1], r = s[2] + s[3];
+      return [color((d - r) / (d + r) * 3), `House: D ${s[0]} called + ${s[1]} leading, R ${s[3]} called + ${s[2]} leading`]; }
+    const c = h.call?.[`${tKind}:${n}`], p = h.race[`${tKind}:${n}`] ?? h.race[`${tKind}:${n} (special)`];
     return c ? [R_COLORS[(c === c.toUpperCase() ? 'called' : 'lead') + c.toUpperCase()], `${c === c.toUpperCase() ? 'called' : 'leading'} ${c.toUpperCase()}`]
       : p != null ? [tOdds(p), `market P(D) ${pct(p)}`] : null; };
   d3.selectAll('path.st').attr('fill', f => at(f.properties.name)?.[0] ?? 'var(--none)').classed('sel', false)
     .select('title').text(f => { const a = at(f.properties.name); return `${f.properties.name}${a ? ': ' + a[1] : ''}`; });
   document.querySelectorAll('#scrub [data-k]').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === tKind));
   document.getElementById('tslide').value = tIdx;
+  document.getElementById('legend').innerHTML = (tKind === 'E' ? MODES.share.stops.map(v => `<span><i style="background:${evColor(v)}"></i>${pct(v)}</span>`).join('') + '<span>early votes as a share of the 2022 vote</span>'
+    : tKind === 'P' ? oddsLegend + '<span>2028 state markets</span>' : tKind === 'H' ? [[-3, 'All R'], [0, 'Even'], [3, 'All D']].map(([v, l]) => `<span><i style="background:${color(v)}"></i>${l}</span>`).join('') + '<span>House seats called + leading, by state</span>'
+    : resLegend + oddsLegend.replace('Market', 'Before votes: market')) + '<span><i style="background:var(--none)"></i>No data</span>';
   const r = h.res[tKind];
-  document.getElementById('tlabel').innerHTML = `<b>${new Date(h.t).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</b> · capture ${tIdx + 1} of ${HR.length}`
-    + (r ? ` · ${{ S: 'Senate', G: 'Governors' }[tKind]} called: ${tag('D')} ${base.D + r.D} – ${tag('R')} ${base.R + r.R} (${r.called}/${r.n} races)` : ' · no votes counted yet');
+  document.getElementById('tlabel').innerHTML = `<b>${new Date(h.t).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</b>${h.bf ? ' <span class="pill" style="padding:0 6px;font-size:11px">backfill: markets + early vote only</span>' : ''} · `
+    + (tKind === 'E' ? `${h.early ? fmt(h.early) : 'no'} early votes cast`
+      : tKind === 'P' ? `Polymarket: Democrats ${h.mkt.P != null ? pct(h.mkt.P) : '—'} to win 2028`
+      : r ? `${TKINDS[tKind]} called: ${tag('D')} ${base.D + r.D} – ${tag('R')} ${base.R + r.R} (${r.called}/${r.n} races)`
+      : `no votes counted yet${h.mkt[tKind] != null ? ` · Polymarket: Democrats ${pct(h.mkt[tKind])} to win the ${TKINDS[tKind]}` : ''}`);
 }
 function renderTimeline() {
   const el = document.getElementById('detail'), first = HR[0], last = HR.at(-1);
   const v0 = k => HR.find(h => h.race[k] != null)?.race[k], v1 = k => HR.findLast(h => h.race[k] != null)?.race[k]; // first and last odds seen (markets close once a race is called)
   const delta = k => v0(k) != null && v1(k) != null ? v1(k) - v0(k) : null;
-  document.getElementById('legend').innerHTML = [['calledD', 'Called D'], ['leadD', 'Leading D'], ['leadR', 'Leading R'], ['calledR', 'Called R']].map(([k, l]) => `<span><i style="background:${R_COLORS[k]}"></i>${l}</span>`).join('')
-    + `<span><i style="background:linear-gradient(90deg,${tOdds(0)},${tOdds(0.5)},${tOdds(1)})"></i>Before votes: market odds R → D</span><span><i style="background:var(--none)"></i>No race</span>`;
   document.getElementById('seats').innerHTML = '';
   if (HR.length) { if (tIdx == null || tIdx >= HR.length) tIdx = HR.length - 1;
     const sc = document.getElementById('scrub');
     sc.innerHTML = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0">
-      <div class="modes" role="group" aria-label="Map shows"><button data-k="S">Senate</button><button data-k="G">Governor</button></div>
+      <div class="modes" role="group" aria-label="Map shows">${Object.entries(TKINDS).map(([k, l]) => `<button data-k="${k}">${l.replace(' 2028', '')}</button>`).join('')}</div>
       <button id="tplay" class="pill" aria-label="Play">▶</button>
       <input type="range" id="tslide" min="0" max="${HR.length - 1}" value="${tIdx}" style="flex:1;min-width:160px" aria-label="Capture time"></div>
       <div class="sub" id="tlabel" style="margin-bottom:4px"></div>`;

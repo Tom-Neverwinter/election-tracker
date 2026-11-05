@@ -18,8 +18,12 @@ function summarize(cap) {
   const call = {}; // "S:Georgia": "D" called / "d" leading (for the Timeline map scrubber)
   for (const r of res) { const k = `${r.office}:${r.state}`;
     if ((r.office === 'S' || r.office === 'G') && !call[k] && (r.called || r.votes)) { const p = r.called ? r.winnerParty : r.cands[0]?.party, s = /^dem/i.test(p) ? 'D' : /^rep/i.test(p) ? 'R' : 'O'; call[k] = r.called ? s : s.toLowerCase(); } }
+  const hs = {}; // House by state: [called D, leading D, leading R, called R]
+  for (const r of res) if (r.office === 'H' && (r.called || r.votes)) { const p = r.called ? r.winnerParty : r.cands[0]?.party, s = /^dem/i.test(p) ? 0 : /^rep/i.test(p) ? 3 : -1;
+    if (s >= 0) (hs[r.state] ??= [0, 0, 0, 0])[r.called ? s : s ? 2 : 1]++; }
+  const ev = Object.fromEntries((d.early?.states ?? []).map(s => [s.state_name, s.cast])); // early votes cast by state
   return {
-    t: cap.captured, call,
+    t: cap.captured, call, hs, ev,
     mkt: { S: r3(d.control?.Senate?.['Democratic Party']), H: r3(d.control?.House?.['Democratic Party']), P: r3(d.president?.party?.Democratic) },
     seats: { S: seats('senate'), H: seats('house'), G: seats('governor') },
     early: d.early ? d.early.states.reduce((a, s) => a + s.cast, 0) : null,
@@ -30,7 +34,9 @@ function summarize(cap) {
 
 function build() {
   const files = fs.readdirSync(dir).filter(f => /^\d{4}-\d\d-\d\dT\d\d(-\d\d)?\.json$/.test(f)).sort();
-  const rows = files.map(f => { try { return summarize(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))); } catch { return null; } }).filter(Boolean).sort((a, b) => a.t.localeCompare(b.t));
+  const rows = files.map(f => { try { return summarize(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))); } catch { return null; } }).filter(Boolean);
+  try { rows.push(...JSON.parse(fs.readFileSync(path.join(dir, 'backfill.json'), 'utf8'))); } catch {} // pre-Election-Day frames from hourly-backfill.js
+  rows.sort((a, b) => a.t.localeCompare(b.t));
   fs.writeFileSync(path.join(dir, 'index.js'), '// Hour-by-hour summary of hourly/*.json, built by hourly-index.js.\nwindow.HOURLY = [\n' + rows.map(r => '  ' + JSON.stringify(r)).join(',\n') + '\n];\n');
   return rows;
 }

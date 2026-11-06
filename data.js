@@ -127,7 +127,7 @@ async function build(office) {
 async function control(slug) {
   try {
     const ev = (await get('https://gamma-api.polymarket.com/events?slug=' + slug))[0];
-    return Object.fromEntries(ev.markets.filter(m => m.outcomePrices && !m.closed).map(m => [m.groupItemTitle || m.question, round(+JSON.parse(m.outcomePrices)[0], 3)]));
+    return Object.fromEntries(ev.markets.filter(m => m.outcomePrices && !m.closed && m.active !== false).map(m => [m.groupItemTitle || m.question, round(+JSON.parse(m.outcomePrices)[0], 3)]));
   } catch { return {}; }
 }
 

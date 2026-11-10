@@ -1,7 +1,7 @@
 // Nov 3 2026 state legislative chamber results from the "Result" column of Wikipedia's "2026 United States state legislative elections" ratings table.
 // Run: node legislature-results.js (hourly.js runs it). Writes legislature-results-data.js: window.LEG_RESULTS = {states: {State: {up, lo}}, pending}.
 const fs = require('fs'), path = require('path');
-const PARTY = { D: 'Democratic', R: 'Republican' };
+const PARTY = { D: 'Democratic', R: 'Republican', 'Coal.': 'Coalition' };
 
 function parse(wiki) {
   const tb = wiki.slice(wiki.indexOf('!Result'), wiki.indexOf('== National results'));
@@ -10,7 +10,7 @@ function parse(wiki) {
     st = row.match(/\[\[#([^|\]]+)\|/)?.[1] ?? st;
     const ch = row.match(/\[\[[^|\]]+\|(Senate|House|Assembly|House of Delegates)\]\]/)?.[1]; // Nebraska's nonpartisan "Legislature" is skipped
     if (!ch) continue; n++;
-    const p = PARTY[row.split('\n').filter(l => /^\|/.test(l)).at(-1).match(/\|\s*([DR]) \d+–\d+[^|]*$/)?.[1]]; // "R 74–31"; coalitions and blanks = no result
+    const p = PARTY[row.split('\n').filter(l => /^\|/.test(l)).at(-1).match(/\|\s*([DR]|Coal\.) \d+–\d+[^|]*$/)?.[1]]; // "R 74–31" or "Coal. 14–6"; blank = no result yet
     if (p) (states[st] ??= {})[ch === 'Senate' ? 'up' : 'lo'] = p; else pending++;
   }
   return { states, pending, n };

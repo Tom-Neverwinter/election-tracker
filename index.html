@@ -425,7 +425,7 @@ function renderStates() {
     <div class="sub" style="margin-top:8px">Trifectas over time: ${Object.entries(CTRL[r.state]).filter(([, v]) => ctrlStatus(v).key === 'tri').length} of ${Object.keys(CTRL[r.state]).length} years listed.</div>`;
   else el.innerHTML = `<h2 style="margin:0;font-size:18px">State government control, ${year}</h2><div class="sub">${rows.length} states with data${year === 2027 ? ` · after the Nov 3, 2026 election, from results so far. Still pending: ${GOV_PENDING} governor races, ${LEG.pending} legislative chambers (these keep their 2026 control until called).` : ''}</div>
     <div style="margin:8px 0">${tally.map(([l, n]) => `${esc(l)} ${n}`).join(' · ')}</div><p class="sub">A trifecta is one party holding the governorship and both legislative chambers. Click a state for details.</p>`;
-  head([['state', 'State'], ['status', 'Control'], ['gov', 'Governor'], ['up', 'Upper chamber'], ['lo', 'Lower chamber']], 'Majority party in each chamber, by seats; "Split" = tied.');
+  head([['state', 'State'], ['status', 'Control'], ['gov', 'Governor'], ['up', 'Upper chamber'], ['lo', 'Lower chamber']], 'Majority party in each chamber, by seats; "Split" = tied; "Coalition" = a cross-party majority runs it.');
   const tb = document.getElementById('rows');
   tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? x.state : x[sortKey] ?? '').map(x => `<tr data-s="${esc(x.state)}"><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${ctrlColor(x.st)}"></span> <b>${esc(x.state)}</b></td><td>${esc(x.status)}</td><td>${cell(x.gov)}</td><td>${cell(x.up)}</td><td>${cell(x.lo)}</td></tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
@@ -456,7 +456,7 @@ function yearPicker() {
   yearSel.value = year;
 }
 // Parties that carried a state before 1976 (president only); D/R keep the site's colors.
-const PARTY_COLOR = { Democratic: 'var(--d)', Republican: 'var(--r)', 'Democratic-Republican': '#2e8b57', Federalist: '#d98c1f', Whig: '#d4b62c',
+const PARTY_COLOR = { Democratic: 'var(--d)', Republican: 'var(--r)', Coalition: '#9b6fb5', 'Democratic-Republican': '#2e8b57', Federalist: '#d98c1f', Whig: '#d4b62c',
   Jacksonian: '#6c9bd6', 'National Republican': '#c9935a', 'Anti-Jacksonian': '#c9935a', 'Southern Democratic': '#8a8a3a', "States' Rights": '#8a8a3a', Independent: '#9b6bcc',
   'American Independent': '#7b5ea7', Progressive: '#3aa8a0', Populist: '#b07a2a', 'Liberal Republican': '#e08a8a', 'Constitutional Union': '#88a0b8',
   'Know Nothing': '#b5651d', Nullifier: '#777', 'Anti-Masonic': '#c77dbb',

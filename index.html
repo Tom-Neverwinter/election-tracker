@@ -37,6 +37,7 @@
   tr { cursor:pointer; } tbody tr:hover { background:var(--bg); }
   .tw { overflow-x:auto; }
   a { color:var(--d); }
+  th:focus-visible, tr:focus-visible { outline:2px solid var(--d); outline-offset:-2px; }
   .seats { display:flex; height:22px; border-radius:4px; overflow:hidden; margin:6px 0 2px; }
   .seats div { display:flex; align-items:center; justify-content:center; font-size:11px; color:#111; }
 </style>
@@ -76,8 +77,8 @@
   <p class="sub" id="srcs"></p>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js" integrity="sha384-Ukv1p/xTma6P4/2bY5KzWBw+ydSpXmhCMtyciIQVDJ1RmOxtCYNMF1uXT9T63H67" crossorigin="anonymous"></script>
 <script src="data.js"></script>
 <script src="history.js"></script>
 <script src="past/president.js"></script>
@@ -101,12 +102,15 @@ picker.append(...Object.keys(HISTORY).sort().reverse().map(d => new Option(d, d)
 picker.value = saved ? day : '';
 picker.onchange = () => location.search = picker.value && '?day=' + picker.value;
 if (!saved) status('Loading live data from Wikipedia, Polymarket and the early-vote feed…');
-let D = saved;
+let D = saved, stale = false;
 try {
   D ??= await loadData();
 } catch (e) {
+  D = HISTORY[Object.keys(HISTORY).sort().at(-1)]; stale = !!D; console.warn(e); // the results, history and states tabs don't need live data
+}
+if (!D) { const e = 'No live data and no saved snapshot.';
   document.querySelector('main').innerHTML = `<h1>Couldn't load data</h1><p>${String(e).replace(/</g, '&lt;')}</p><p>Check your connection and reload.</p>`;
-  throw e;
+  throw new Error(e);
 }
 
 const CATS = [ // score thresholds on the −3 (Safe R) … +3 (Safe D) scale
@@ -117,21 +121,21 @@ const cat = s => CATS.find(([t]) => s >= t);
 const color = s => s == null ? 'var(--none)' : cat(s)[2];
 const PAST = { national: TURNOUT.national, pres: PRESIDENT.list, states: Object.fromEntries(Object.keys(TURNOUT.states).map(n => [n, { t: TURNOUT.states[n], p: PRESIDENT.states[n] ?? {}, s: SENATE[n] ?? {}, g: GOVERNOR[n] ?? {} }])) };
 const pct = p => p == null ? '—' : Math.round(p * 100) + '%';
+const fg = c => c[0] !== '#' ? 'var(--ink)' : d3.hsl(c).l < 0.6 ? '#fff' : '#111'; // text color that reads on a seat-bar segment
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-let [office, hashYear] = location.hash.slice(1).split('/'); office ||= localStore('office') || 'senate'; let sel = null, sortKey = 'abs', sortDir = 1, geo;
+let [office, hashYear] = location.hash.slice(1).split('/'); office ||= localStore('office') || (window.RESULTS?.races?.length ? 'results' : 'senate'); let sel = null, sortKey = 'abs', sortDir = 1, geo;
 
 function localStore(k, v) { try { return v === undefined ? localStorage.getItem(k) : localStorage.setItem(k, v); } catch { return null; } }
 
 document.getElementById('updated').textContent =
-  `${saved ? 'Snapshot from' : 'Live as of'} ${new Date(D.updated).toLocaleString()} · consensus = average of ${D.governor.raters.length}–${D.senate.raters.length} forecasters + Polymarket odds`;
+  `${saved ? 'Snapshot from' : stale ? 'Live data unavailable; showing the snapshot from' : 'Live as of'} ${new Date(D.updated).toLocaleString()} · consensus = average of ${D.governor.raters.length}–${D.senate.raters.length} forecasters + Polymarket odds`;
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   year = LIVE[b.dataset.o] ?? ({ states: CTRL_LATEST, measures: MEAS_NOW }[b.dataset.o] ?? HOUSE_LATEST); office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
 });
 if (!D.early) document.querySelector('[data-o=early]').remove();
-if (office === 'early' && !D.early) office = 'governor';
 if (!D.president) document.querySelector('[data-o=president]').remove();
-if (office === 'president' && !D.president) office = 'governor';
+if (![...document.querySelectorAll('.tabs button')].some(b => b.dataset.o === office)) office = 'governor'; // removed tab or a bad #hash
 for (const r of D.president?.races ?? []) { // 2024 result is the "held by" baseline, and the fallback where no market exists yet
   const p = PRESIDENT.states[r.state]?.[2024];
   if (!p) continue;
@@ -180,6 +184,7 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
 
 function render() {
   yearPicker();
+  history.replaceState(null, '', '#' + office + (yearSel.hidden ? '' : '/' + year));
   document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-pressed', b.dataset.o === office));
   document.getElementById('modes').hidden = office !== 'early';
   document.getElementById('hmodes').hidden = office !== 'history';
@@ -236,7 +241,7 @@ function renderResults() {
     .select('title').text(f => (g.get(f.properties.name) ?? []).map(r => `${rLabel(r)}: ${rLead(r) ? `${rLead(r).name} (${rParty(rLead(r).party)}) ${rLead(r).pct}%${r.called ? ' · called' : ''}` : 'no votes yet'} · ${Math.round(r.pctIn ?? 0)}% in`).join('\n') || `${f.properties.name}: no race`);
   const k = s => rows.filter(r => r.called && rParty(r.winnerParty) === s).length, l = s => rows.filter(r => !r.called && rSide(r) === s).length;
   document.getElementById('seats').innerHTML = [[k('D'), R_COLORS.calledD, 'Called D'], [l('D'), R_COLORS.leadD, 'Leading D'], [rows.filter(r => !rSide(r)).length, 'var(--none)', 'No votes'], [l('R'), R_COLORS.leadR, 'Leading R'], [k('R'), R_COLORS.calledR, 'Called R']]
-    .filter(([n]) => n).map(([n, c, t]) => `<div style="flex:${n};background:${c}" title="${t}: ${n}">${n}</div>`).join('');
+    .filter(([n]) => n).map(([n, c, t]) => `<div style="flex:${n};background:${c};color:${fg(c)}" title="${t}: ${n}">${n}</div>`).join('');
   const mine = sel && g.get(sel);
   const bar = c => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(c.name)} <span class="sub">${esc(rParty(c.party) ?? '')}</span></span><span>${c.pct}% · ${fmt(c.votes)}</span></div>
     <div style="height:6px;background:var(--line);border-radius:3px;margin:2px 0 6px"><div style="height:6px;width:${Math.min(100, c.pct)}%;background:${R_COLORS['called' + (rParty(c.party) ?? 'O')] ?? R_COLORS.calledO};border-radius:3px"></div></div>`;
@@ -588,7 +593,7 @@ function tug(o) { // election night tug of war: D pulls from the left, R from th
   const total = base.D + base.R + rows.length, need = Math.floor(total / 2) + 1, cd = base.D + k('D'), cr = base.R + k('R'), ld = l('D'), lr = l('R');
   const prev = [...HR].reverse().find(h => new Date(h.t) <= new Date(R.updated) - 55 * 60e3)?.res[code]; // ~an hour earlier
   const moved = prev ? [['D', k('D') - prev.D], ['R', k('R') - prev.R]].filter(([, n]) => n > 0).map(([p, n]) => `${tag(p)} +${n}`).join(' ') || 'no new calls' : '';
-  const seg = (n, c, t) => n > 0 ? `<div style="flex:${n};background:${c}" title="${t}: ${n}">${n / total > 0.04 ? n : ''}</div>` : '';
+  const seg = (n, c, t) => n > 0 ? `<div style="flex:${n};background:${c};color:${fg(c)}" title="${t}: ${n}">${n / total > 0.04 ? n : ''}</div>` : '';
   return `<div style="margin:8px 0 12px">
     <div style="display:flex;justify-content:space-between;font-size:14px"><span>${tag('D')} <b style="font-size:18px">${cd}</b>${ld ? ` <span class="sub">+${ld} leading</span>` : ''}</span>
       <span><b>${{ senate: 'Senate', house: 'House', governor: 'Governors' }[o]}</b> <span class="sub">${need} to win</span></span>
@@ -601,7 +606,7 @@ function renderFlow() { // the 2026 outlook: just the open office on its own tab
   const el = document.getElementById('flow');
   el.hidden = isPast() || office === 'states' || office === 'history';
   if (el.hidden) return;
-  const live = R?.races?.length && R.races.some(r => r.votes) ? `<div class="sub">Election night · tug of war · dark = called (incl. seats not up), light = leading · updated ${new Date(R.updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>${['senate', 'house', 'governor'].map(tug).join('')}` : '';
+  const live = R?.races?.length && R.races.some(r => r.votes) ? `<div class="sub">Nov 3 results · tug of war · dark = called (incl. seats not up), light = leading · updated ${new Date(R.updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>${['senate', 'house', 'governor'].map(tug).join('')}` : '';
   if (live && office !== 'president') return el.innerHTML = live;
   if (office === 'president') return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2028 outlook (markets only; forecasters haven't rated 2028 yet)</div>${presLine(true)}`;
   if (office in NOT_UP) return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2026 outlook: who holds power now, and who's favored in each race (consensus of forecasters and Polymarket)</div>${chamberLine(office, true)}`;
@@ -722,7 +727,7 @@ function renderHistory() {
 function renderSeats() {
   const counts = CATS.map(c => [c, d3.sum(races().filter(r => r.score != null && cat(r.score) === c), r => r.ev ?? 1)]); // president: weighted by electoral votes
   document.getElementById('seats').innerHTML = counts.filter(([, n]) => n).map(([c, n]) =>
-    `<div style="flex:${n};background:${c[2]}" title="${c[1]}: ${n}">${n}</div>`).join('');
+    `<div style="flex:${n};background:${c[2]};color:${fg(c[2])}" title="${c[1]}: ${n}">${n}</div>`).join('');
 }
 
 function renderDetail() {
@@ -745,11 +750,13 @@ function renderDetail() {
 function head(cols, note) { // cols: [key|null, label]
   document.getElementById('tnote').textContent = note;
   const tr = document.getElementById('thead');
-  tr.innerHTML = cols.map(([k, l]) => `<th${k ? ` data-k="${k}"` : ''}>${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
+  tr.innerHTML = cols.map(([k, l]) => `<th${k ? ` data-k="${k}" tabindex="0"` : ''}>${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
   tr.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
     sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory, results: renderResults, measures: renderMeasures, states: renderStates, timeline: renderTimeline }[office] ?? renderTable)();
   });
 }
+new MutationObserver(() => document.querySelectorAll('#rows tr[data-s]').forEach(tr => tr.tabIndex = 0)).observe(document.getElementById('rows'), { childList: true });
+document.querySelector('table').onkeydown = e => { if (e.key === 'Enter' && e.target.matches('th[data-k], tr[data-s]')) e.target.click(); };
 const sorted = (rows, val) => [...rows].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sortDir);
 
 function renderEarly() {

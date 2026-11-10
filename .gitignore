@@ -1,3 +1,4 @@
 snapshot.log
 *.tmp
 hourly.log
+.claude/

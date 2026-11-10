@@ -10,7 +10,7 @@ function parse(wiki) {
     st = row.match(/\[\[#([^|\]]+)\|/)?.[1] ?? st;
     const ch = row.match(/\[\[[^|\]]+\|(Senate|House|Assembly|House of Delegates)\]\]/)?.[1]; // Nebraska's nonpartisan "Legislature" is skipped
     if (!ch) continue; n++;
-    const p = PARTY[row.split('\n').filter(l => /^\|/.test(l)).at(-1).match(/\|\s*([DR]|Coal\.)(?: \d+–\d+[^|]*)?\s*$/)?.[1]]; // "R 74–31", "Coal. 14–6", or a bare "D" (control called, seats still counting); blank = no result yet
+    const p = PARTY[row.split('\n').filter(l => /^\|(?!\})/.test(l)).at(-1).match(/\|\s*([DR]|Coal\.)(?: \d+–\d+[^|]*)?\s*$/)?.[1]]; // "R 74–31", "Coal. 14–6", or a bare "D" (control called, seats still counting); blank = no result yet
     if (p) (states[st] ??= {})[ch === 'Senate' ? 'up' : 'lo'] = p; else pending++;
   }
   return { states, pending, n };

@@ -52,6 +52,7 @@
     <div class="tabs" role="group" aria-label="Election 2026"><button data-o="results">Results</button><button data-o="timeline">Timeline</button><button data-o="early">Early vote</button><button data-o="measures">Measures</button></div>
     <div class="tabs" role="group" aria-label="Background"><button data-o="states">States</button><button data-o="history">History</button></div>
     <select class="pill" id="year" aria-label="Election year" style="color:inherit" hidden></select>
+    <select class="pill" id="cmp" aria-label="Compare turnout with" style="color:inherit" hidden></select>
     <select class="pill" id="day" aria-label="Show data from" style="color:inherit"><option value="">Live</option></select>
   </div>
 
@@ -131,7 +132,7 @@ function localStore(k, v) { try { return v === undefined ? localStorage.getItem(
 document.getElementById('updated').textContent =
   `${saved ? 'Snapshot from' : stale ? 'Live data unavailable; showing the snapshot from' : 'Live as of'} ${new Date(D.updated).toLocaleString()} · consensus = average of ${D.governor.raters.length}–${D.senate.raters.length} forecasters + Polymarket odds`;
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
-  year = LIVE[b.dataset.o] ?? ({ states: CTRL_LATEST, measures: MEAS_NOW }[b.dataset.o] ?? HOUSE_LATEST); office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 't22' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
+  year = LIVE[b.dataset.o] ?? ({ states: CTRL_LATEST, measures: MEAS_NOW, history: 2022 }[b.dataset.o] ?? HOUSE_LATEST); office = b.dataset.o; localStore('office', office); sel = null; sortKey = { early: 'per', history: 'a' }[office] ?? 'abs'; sortDir = office === 'early' || office === 'history' ? -1 : 1; render();
 });
 if (!D.early) document.querySelector('[data-o=early]').remove();
 if (!D.president) document.querySelector('[data-o=president]').remove();
@@ -143,7 +144,7 @@ for (const r of D.president?.races ?? []) { // 2024 result is the "held by" base
   if (r.score == null) { r.score = Math.round(Math.max(-3, Math.min(3, (p[0] - p[1]) / 5)) * 100) / 100; r.note = 'no market yet, 2024 margin'; } // ponytail: 15+ pt margin = Safe
 }
 if (office === 'early') { sortKey = 'per'; sortDir = -1; }
-if (office === 'history') { sortKey = 't22'; sortDir = -1; }
+if (office === 'history') { sortKey = 'a'; sortDir = -1; }
 
 const EV = D.early ? new Map(D.early.states.map(s => [s.state_name, s])) : new Map();
 const share = s => s.cast / s.turnout22; // ponytail: share of total 2022 turnout, not same-day 2022 pace (no public 2022 daily series)
@@ -440,19 +441,25 @@ function renderStates() {
 // ---- Past years on the Governor / Senate / President tabs (past/*.js) ----
 const LIVE = { governor: 2026, senate: 2026, president: 2028, ...(D.house ? { house: 2026 } : {}) }; // old snapshots have no House forecast
 const HOUSE_LATEST = Math.max(...Object.keys(HOUSE.national).map(Number)); // House has no forecast here, only past delegations
-let year = +hashYear || LIVE[office] || (office === 'measures' ? 2026 : office === 'states' ? Math.max(...Object.values(window.CONTROL ?? {}).flatMap(s => Object.keys(s).map(Number))) : HOUSE_LATEST); // #president/1860 opens a past year
+let year = +hashYear || LIVE[office] || (office === 'measures' ? 2026 : office === 'history' ? 2022 : office === 'states' ? Math.max(...Object.values(window.CONTROL ?? {}).flatMap(s => Object.keys(s).map(Number))) : HOUSE_LATEST); // #president/1860 opens a past year
 const isPast = () => office === 'house' && !LIVE.house || office in LIVE && year !== LIVE[office];
 if (isPast()) sortKey = 'margin';
-const pastYears = o => o === 'states' ? ctrlYears() : o === 'measures' ? measYears() : o === 'house' ? Object.keys(HOUSE.national).map(Number).reverse() : o === 'president' ? [...PRESIDENT.years].reverse()
+const pastYears = o => o === 'history' ? turnoutYears : o === 'states' ? ctrlYears() : o === 'measures' ? measYears() : o === 'house' ? Object.keys(HOUSE.national).map(Number).reverse() : o === 'president' ? [...PRESIDENT.years].reverse()
   : [...new Set([...Object.values(o === 'senate' ? SENATE : GOVERNOR).flatMap(x => Object.keys(x).map(y => parseInt(y))),
       ...(o === 'senate' ? Object.keys(SENATE_SEATS.national).map(Number).filter(y => y < 1976) : [])])].sort((a, b) => b - a);
 // Seat-holding view: the House always; the Senate before 1976 (no popular-vote results here before then)
 const seatSrc = () => office === 'house' ? HOUSE : office === 'senate' && year < 1976 ? SENATE_SEATS : null;
 const chamber = () => office === 'house' ? 'House' : 'Senate';
 const yearSel = document.getElementById('year');
-yearSel.onchange = () => { year = +yearSel.value; sel = null; sortKey = isPast() ? 'margin' : 'abs'; sortDir = 1; render(); };
+yearSel.onchange = () => { year = +yearSel.value; if (office === 'history') return render(); sel = null; sortKey = isPast() ? 'margin' : 'abs'; sortDir = 1; render(); };
+// History tab: turnout in the picked year, compared with a second year (past/turnout.js has every state, 1980-2024)
+const turnoutYears = [...new Set(Object.values(TURNOUT.states).flatMap(t => Object.keys(t).map(Number)))].sort((a, b) => b - a);
+const cmpSel = document.getElementById('cmp'); let cmp = 2018;
+cmpSel.append(...turnoutYears.map(y => new Option('vs ' + y, y))); cmpSel.value = cmp;
+cmpSel.onchange = () => { cmp = +cmpSel.value; render(); };
 function yearPicker() {
-  yearSel.hidden = !(office in LIVE || office === 'house' || office === 'states' || office === 'measures' && PASTM.length > 0);
+  cmpSel.hidden = office !== 'history';
+  yearSel.hidden = !(office in LIVE || office === 'house' || office === 'states' || office === 'history' || office === 'measures' && PASTM.length > 0);
   if (yearSel.hidden) return;
   if (yearSel.dataset.o !== office) {
     yearSel.dataset.o = office;
@@ -620,12 +627,14 @@ const pc = v => v == null ? '—' : v.toFixed(1) + '%';
 const result = r => !r ? '—' : `${tag(r[2])} ${r[3] ? esc(r[3]) + ' ' : ''}<span class="sub">${r[0] ? 'D ' + r[0] : ''}${r[0] && r[1] ? ' · ' : ''}${r[1] ? 'R ' + r[1] : ''}</span>`;
 const nowRate = name => EV.has(name) ? voted(EV.get(name)) * 100 : null;
 const nationNow = () => D.early ? d3.sum(D.early.states, s => s.cast) / d3.sum(D.early.states, elig) * 100 : null;
+const natT = y => { const r = PAST.national.find(r => r[0] === y); return r ? r[1] ?? r[2] : null; };
+const pts = v => v == null || isNaN(v) ? '—' : `<b style="color:var(--${v < 0 ? 's2' : 's1'})">${v > 0 ? '+' : ''}${v.toFixed(1)} pts</b>`; // change in turnout, percentage points
 const midAvg = t => d3.mean(Object.entries(t).filter(([y]) => y % 4 === 2).map(([, v]) => v));
 
 let chart; // series for the hover readout
 let histView = 'state';
 document.querySelectorAll('#hmodes button').forEach(b => b.onclick = () => {
-  histView = b.dataset.v; sel = null; sortKey = histView === 'pres' ? 'year' : 't22'; sortDir = -1; renderHistory();
+  histView = b.dataset.v; sel = null; sortKey = histView === 'pres' ? 'year' : 'a'; sortDir = -1; renderHistory();
 });
 const NEVER_ELECTED = [ // took office by succession and never won a general election for president
   [1841, 'John Tyler', 'Whig', 'Took office when William Henry Harrison died'],
@@ -680,11 +689,11 @@ function renderHistory() {
   if (sel) histView = 'state';
   document.querySelectorAll('#hmodes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === histView));
   const legendVals = [30, 40, 50, 60, 70];
-  document.getElementById('legend').innerHTML = legendVals.map((v, i) => `<span><i style="background:${turnoutColor(v)}"></i>${i === 0 ? '≤' : ''}${v}%${i === 4 ? '+' : ''}</span>`).join('') + `<span>of eligible voters who voted in the 2022 midterm</span>`;
+  document.getElementById('legend').innerHTML = legendVals.map((v, i) => `<span><i style="background:${turnoutColor(v)}"></i>${i === 0 ? '≤' : ''}${v}%${i === 4 ? '+' : ''}</span>`).join('') + `<span>of eligible voters who voted in ${year}</span>`;
   d3.selectAll('path.st')
-    .attr('fill', f => { const t = P[f.properties.name]?.t[2022]; return t == null ? 'var(--none)' : turnoutColor(t); })
+    .attr('fill', f => { const t = P[f.properties.name]?.t[year]; return t == null ? 'var(--none)' : turnoutColor(t); })
     .classed('sel', f => f.properties.name === sel)
-    .select('title').text(f => { const s = P[f.properties.name]; return s ? `${f.properties.name}: ${pc(s.t[2022])} voted in 2022 · midterm average ${pc(midAvg(s.t))}` : f.properties.name; });
+    .select('title').text(f => { const s = P[f.properties.name]; return s ? `${f.properties.name}: ${pc(s.t[year])} voted in ${year} · ${pc(s.t[cmp])} in ${cmp} · midterm average ${pc(midAvg(s.t))}` : f.properties.name; });
   document.getElementById('seats').innerHTML = '';
   const el = document.getElementById('detail'), s = P[sel];
   const col = ['var(--s1)', 'var(--s2)'];
@@ -692,6 +701,7 @@ function renderHistory() {
     const nat = PAST.national;
     el.innerHTML = `<h2 style="margin:0;font-size:18px">Nationwide turnout since 1789</h2>
       ${lineChart([{ name: 'Presidential years', color: col[0], pts: nat.filter(r => r[1] != null).map(r => [r[0], r[1]]) }, { name: 'Midterm years', color: col[1], pts: nat.filter(r => r[2] != null).map(r => [r[0], r[2]]) }], nationNow())}
+      <div class="sub">Nationwide: ${[year, cmp].map(y => `${y} <b>${pc(natT(y))}</b>`).join(' · ')} · change ${pts(natT(year) - natT(cmp))}</div>
       <p class="sub">Share of eligible voters who voted. The 2026 dot counts early ballots only, so it will rise on Election Day. Click a state for its results back to 1976.</p>`;
   } else {
     const yrs = Object.keys(s.t).map(Number).sort((a, b) => a - b);
@@ -701,7 +711,7 @@ function renderHistory() {
       ${lineChart([{ name: 'Presidential years', color: col[0], pts: yrs.filter(y => y % 4 === 0).map(y => [y, s.t[y]]) }, { name: 'Midterm years', color: col[1], pts: mids.map(y => [y, s.t[y]]) }], nowRate(sel))}
       <div class="sub">Midterm average ${pc(midAvg(s.t))} · high ${pc(s.t[hi])} in ${hi} · low ${pc(s.t[lo])} in ${lo}</div>
       <div style="margin-top:8px"><a href="#" id="allst">← All states</a></div>`;
-    document.getElementById('allst').onclick = e => { e.preventDefault(); sel = null; sortKey = 't22'; sortDir = -1; render(); };
+    document.getElementById('allst').onclick = e => { e.preventDefault(); sel = null; sortKey = 'a'; sortDir = -1; render(); };
   }
   wireChart();
   const tb = document.getElementById('rows');
@@ -713,11 +723,11 @@ function renderHistory() {
     tb.innerHTML = years.map(y => `<tr style="cursor:default"><td><b>${y}</b></td><td>${pc(s.t[y])}</td><td>${result(s.p[y])}</td>
       <td>${[s.s[y], s.s[y + 's']].filter(Boolean).map(result).join('<br>') || '—'}</td><td>${result(s.g[y])}</td></tr>`).join('');
   } else {
-    head([['state', 'State'], ['now', '2026 early so far'], ['t22', '2022 turnout'], ['t18', '2018 turnout'], ['avg', 'Midterm average'], ['t24', '2024 turnout'], ['m24', '2024 president']],
-      'Turnout = share of eligible voters. Midterm average covers 1982–2022; where total ballots are unknown, votes in the top race are used. 2026 counts early ballots only, against citizens 18+. Click a state for its full history.');
-    const rows = Object.entries(P).map(([state, v]) => ({ state, now: nowRate(state), t22: v.t[2022], t18: v.t[2018], t24: v.t[2024], avg: midAvg(v.t), m24: v.p[2024] ? v.p[2024][0] - v.p[2024][1] : null }));
+    head([['state', 'State'], ['now', '2026 early so far'], ['a', year + ' turnout'], ['b', cmp + ' turnout'], ['chg', 'Change'], ['avg', 'Midterm average'], ['m24', '2024 president']],
+      'Pick the two years to compare in the menus at the top (any election 1980–2024). Turnout = share of eligible voters; change is in percentage points. Midterm average covers 1982–2022; where total ballots are unknown, votes in the top race are used. 2026 counts early ballots only, against citizens 18+. Click a state for its full history.');
+    const rows = Object.entries(P).map(([state, v]) => ({ state, now: nowRate(state), a: v.t[year], b: v.t[cmp], chg: v.t[year] != null && v.t[cmp] != null ? v.t[year] - v.t[cmp] : null, avg: midAvg(v.t), m24: v.p[2024] ? v.p[2024][0] - v.p[2024][1] : null }));
     tb.innerHTML = sorted(rows, r => r[sortKey] ?? -1e9).map(r => `<tr data-s="${esc(r.state)}"><td><b>${esc(r.state)}</b></td><td>${pc(r.now)}</td>
-      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${turnoutColor(r.t22)}"></span> ${pc(r.t22)}</td><td>${pc(r.t18)}</td><td>${pc(r.avg)}</td><td>${pc(r.t24)}</td>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${r.a == null ? 'var(--none)' : turnoutColor(r.a)}"></span> ${pc(r.a)}</td><td>${pc(r.b)}</td><td>${pts(r.chg)}</td><td>${pc(r.avg)}</td>
       <td>${r.m24 == null ? '—' : `${tag(r.m24 > 0 ? 'D' : 'R')} +${Math.abs(r.m24).toFixed(1)}`}</td></tr>`).join('');
     tb.querySelectorAll('tr[data-s]').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   }

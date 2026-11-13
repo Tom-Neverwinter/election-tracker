@@ -92,6 +92,7 @@
 <script src="measures.js"></script>
 <script src="measures-results-data.js"></script>
 <script src="legislature-results-data.js"></script>
+<script src="certification.js"></script>
 <script src="past/measures.js"></script>
 <script src="hourly/index.js"></script>
 <script type="module">
@@ -178,7 +179,7 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
   geo = topojson.feature(us, us.objects.states).features;
   d3.select('#map').append('g').selectAll('path').data(geo).join('path')
     .attr('class', 'st').attr('d', d3.geoPath())
-    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (rkind === 'C' ? f.properties.name in CERT : (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name)) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
     .append('title');
   render();
 });
@@ -220,7 +221,7 @@ const R = window.RESULTS;
 const RKIND = { S: ['senate', 'Senate'], H: ['house', 'House'], G: ['governor', 'Governor'], O: ['other', 'Other statewide'] }; // O = attorney general, secretary of state, lt. governor...
 let rkind = 'S';
 const rmodes = document.getElementById('rmodes');
-rmodes.innerHTML = Object.entries(RKIND).map(([k, [, l]]) => `<button data-r="${k}">${l}</button>`).join('');
+rmodes.innerHTML = Object.entries(RKIND).map(([k, [, l]]) => `<button data-r="${k}">${l}</button>`).join('') + (window.CERT ? '<button data-r="C">Certification</button>' : '');
 rmodes.querySelectorAll('button').forEach(b => b.onclick = () => { rkind = b.dataset.r; sel = null; render(); });
 const rParty = p => /^dem/i.test(p) ? 'D' : /^rep/i.test(p) ? 'R' : p ? 'O' : null;
 const rLead = r => r.cands[0] && r.cands[0].votes > 0 ? r.cands[0] : null;
@@ -231,6 +232,7 @@ const rLabel = r => r.office === 'O' ? `${r.state} ${r.name}` : r.district != nu
 const forecastFor = r => (D[RKIND[r.office][0]]?.races ?? []).find(f => f.state === r.state && (r.office !== 'H' || f.label.endsWith('-' + (r.district || 'AL')))); // ponytail: Senate specials share a state; the first forecast row wins
 function renderResults() {
   document.querySelectorAll('#rmodes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.r === rkind));
+  if (rkind === 'C') return renderCert();
   const rows = (R?.races ?? []).filter(r => r.office === rkind), g = d3.group(rows, r => r.state);
   const el = document.getElementById('detail');
   document.getElementById('legend').innerHTML = [['calledD', 'Called D'], ['leadD', 'Leading D'], ['leadR', 'Leading R'], ['calledR', 'Called R'], ['calledO', 'Other']]
@@ -251,7 +253,7 @@ function renderResults() {
     return `<h2 style="margin:0;font-size:18px">${esc(rLabel(r))} ${r.office === 'O' ? '' : RKIND[r.office][1]}</h2>
       <div class="sub">${Math.round(r.pctIn ?? 0)}% of expected vote in · ${fmt(r.votes)} votes${r.called ? ` · <b>called for ${esc(r.winner)}</b>` : ''}</div>
       <div style="margin-top:8px">${r.cands.map(bar).join('')}</div>
-      ${fc ? `<div class="sub">Forecast: ${cat(fc.score)[1]}${fc.market?.pD != null ? ` · market P(D) ${pct(fc.market.pD)}` : ''}</div>` : ''}`; }).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
+      ${fc ? `<div class="sub">Forecast: ${cat(fc.score)[1]}${fc.market?.pD != null ? ` · market P(D) ${pct(fc.market.pD)}` : ''}</div>` : ''}`; }).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">') + (CERT[sel] ? `<div class="sub" style="margin-top:10px">Official once certified: ${esc(certStatus(CERT[sel]).label)} · state deadline ${dShort(CERT[sel].state)}</div>` : '');
   else { const base = NOT_UP[RKIND[rkind][0]] ?? { D: 0, R: 0 };
     el.innerHTML = `<h2 style="margin:0;font-size:18px">${RKIND[rkind][1]} results</h2>
       <div class="sub">Updated ${new Date(R.updated).toLocaleString()} · ${rows.length} races · ${rows.filter(r => r.called).length} called${R.failed?.length ? ` · couldn't load ${R.failed.length} states` : ''}</div>
@@ -264,6 +266,39 @@ function renderResults() {
     <td>${Math.round(r.in)}%</td><td>${esc(r.lead) || '—'}${r.lead ? ` <span class="sub">${esc(rParty(rLead(r).party))}</span>` : ''}</td><td>${r.lead ? r.margin.toFixed(1) : '—'}</td><td>${r.called ? `<b>${esc(r.status)}</b>` : r.status}</td><td>${r.fc ? cat(r.fc.score)[1] : '—'}</td></tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   document.getElementById('srcs').innerHTML = 'Sources: <a href="https://www.nbcnews.com/politics/2026-elections">NBC News</a> election results (vote data from the Associated Press), pulled by results.js.';
+}
+
+// ---- Results tab, Certification view: each state's deadline to make the Nov 3 results official (certification.js) ----
+const CERT = window.CERT ?? {};
+const CERT_KEYS = { done: ['Certified', '#2f9e44'], past: ['Deadline passed', '#8fd19e'], due: ['Deadline ahead', '#e6bb5c'], none: ['No fixed deadline', 'var(--none)'] };
+const dShort = iso => iso ? new Date(iso + 'T12:00').toLocaleDateString([], { month: 'short', day: 'numeric' }) : '—';
+function certStatus(c) { // ponytail: no public feed of completed certifications, so "Certified" only comes from a hand-entered certified date; otherwise it's the calendar
+  if (c.certified) return { key: 'done', label: 'Certified ' + dShort(c.certified) };
+  if (!c.state) return { key: 'none', label: 'No fixed deadline' };
+  const left = Math.floor((new Date(c.state + 'T23:59:59') - Date.now()) / 864e5);
+  return left < 0 ? { key: 'past', label: 'Deadline passed' } : { key: 'due', label: left ? `Due in ${left} day${left > 1 ? 's' : ''}` : 'Due today' };
+}
+function renderCert() {
+  const rows = Object.entries(CERT).map(([name, c]) => ({ name, local: c.local, due: c.state, rule: c.rule, localRule: c.localRule, st: certStatus(c), status: certStatus(c).label }));
+  const g = new Map(rows.map(r => [r.name, r])), n = k => rows.filter(r => r.st.key === k).length, el = document.getElementById('detail');
+  const used = Object.entries(CERT_KEYS).filter(([k]) => n(k));
+  document.getElementById('legend').innerHTML = used.map(([, [l, c]]) => `<span><i style="background:${c}"></i>${l}</span>`).join('');
+  d3.selectAll('path.st').attr('fill', f => g.has(f.properties.name) ? CERT_KEYS[g.get(f.properties.name).st.key][1] : 'var(--none)').classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => { const r = g.get(f.properties.name); return r ? `${r.name}: ${r.status} · state deadline ${dShort(r.due)}` : f.properties.name; });
+  document.getElementById('seats').innerHTML = used.map(([k, [l, c]]) => `<div style="flex:${n(k)};background:${c};color:${fg(c)}" title="${l}: ${n(k)}">${n(k)}</div>`).join('');
+  const r = sel && g.get(sel);
+  if (r) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(r.name)} · certification</h2><div style="margin:8px 0;font-size:18px;font-weight:600;color:${CERT_KEYS[r.st.key][1]}">${esc(r.status)}</div>
+    <div>County / local canvass by <b>${dShort(r.local)}</b></div><div class="sub">${esc(r.localRule)}</div>
+    <div style="margin-top:8px">State certification by <b>${dShort(r.due)}</b></div><div class="sub">${esc(r.rule)}</div>`;
+  else el.innerHTML = `<h2 style="margin:0;font-size:18px">Certifying the Nov 3 results</h2><div class="sub">Race calls are projections. A result is official once the state certifies it.</div>
+    <div style="margin:8px 0">${used.map(([k, [l]]) => `${l} ${n(k)}`).join(' · ')}</div>
+    <b>Next deadlines</b>${sorted(rows.filter(x => x.st.key === 'due'), x => x.due).slice(0, 8).map(x => `<div class="sub" style="display:flex;justify-content:space-between"><span>${esc(x.name)}</span><span>${dShort(x.due)} · ${x.status.toLowerCase()}</span></div>`).join('') || '<div class="sub">None left.</div>'}
+    <p class="sub">"Deadline passed" means the legal date has gone by, not that certification is confirmed: no one publishes a live list, so "Certified" shows only for states confirmed by hand. Click a state for its rule.</p>`;
+  head([['name', 'State'], ['local', 'Local canvass by'], ['due', 'State certification by'], ['status', 'Status'], [null, 'State rule']], 'Earliest state deadline first. Dates are legal deadlines or targets; some states certify earlier, and recounts can push them later.');
+  const tb = document.getElementById('rows');
+  tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? x.due ?? '9' : x[sortKey] ?? '9').map(x => `<tr data-s="${esc(x.name)}"><td style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${CERT_KEYS[x.st.key][1]}"></span> <b>${esc(x.name)}</b></td><td>${dShort(x.local)}</td><td>${dShort(x.due)}</td><td style="white-space:nowrap">${esc(x.status)}</td><td class="sub">${esc(x.rule)}</td></tr>`).join('');
+  tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  document.getElementById('srcs').innerHTML = 'Sources: certification deadlines from <a href="https://usafacts.org/articles/the-viz-lab/election-certification/">USAFacts</a>, compiled from the <a href="https://www.ncsl.org/elections-and-campaigns/election-certification-deadlines">National Conference of State Legislatures</a> and state election offices.';
 }
 
 // ---- Measures tab: 2026 statewide ballot measures (measures.js), with NBC results where results.js found them ----

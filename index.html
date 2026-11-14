@@ -197,6 +197,8 @@ function render() {
   if (office === 'early') return renderEarly();
   if (office === 'history') return renderHistory();
   if (office === 'results') return renderResults();
+  const rk = { senate: 'S', house: 'H', governor: 'G' }[office];
+  if (rk && !isPast() && R?.day?.startsWith(String(new Date().getFullYear())) && R.races.some(r => r.votes)) { rkind = rk; return renderResults(); } // ponytail: once votes are in, the forecast tabs show results; the old forecast stays in each race's detail and the Timeline
   if (office === 'measures') return renderMeasures();
   if (office === 'timeline') return renderTimeline();
   if (office === 'states') return renderStates();

@@ -227,6 +227,7 @@ const rParty = p => /^dem/i.test(p) ? 'D' : /^rep/i.test(p) ? 'R' : p ? 'O' : nu
 const rLead = r => r.cands[0] && r.cands[0].votes > 0 ? r.cands[0] : null;
 const rSide = r => rParty(r.called ? r.winnerParty : rLead(r)?.party); // D, R, O or null (no votes yet)
 const R_COLORS = { calledD: '#1c4e8f', leadD: '#9ec3ea', leadR: '#f0a8a8', calledR: '#a02626', calledO: '#9b6bcc', leadO: '#cdb4e6' };
+const split = d3.interpolateRgb(R_COLORS.calledR, R_COLORS.calledD); // D share of a state's House seats → red…purple…blue
 const rColor = r => { const s = rSide(r); return s ? R_COLORS[(r.called ? 'called' : 'lead') + s] : 'var(--none)'; };
 const rLabel = r => r.office === 'O' ? `${r.state} ${r.name}` : r.district != null ? `${r.state} ${r.district || 'at-large'}` : r.state;
 const forecastFor = r => (D[RKIND[r.office][0]]?.races ?? []).find(f => f.state === r.state && (r.office !== 'H' || f.label.endsWith('-' + (r.district || 'AL')))); // ponytail: Senate specials share a state; the first forecast row wins
@@ -236,10 +237,10 @@ function renderResults() {
   const rows = (R?.races ?? []).filter(r => r.office === rkind), g = d3.group(rows, r => r.state);
   const el = document.getElementById('detail');
   document.getElementById('legend').innerHTML = [['calledD', 'Called D'], ['leadD', 'Leading D'], ['leadR', 'Leading R'], ['calledR', 'Called R'], ['calledO', 'Other']]
-    .map(([k, l]) => `<span><i style="background:${R_COLORS[k]}"></i>${l}</span>`).join('') + '<span><i style="background:var(--none)"></i>No results yet</span>';
+    .map(([k, l]) => `<span><i style="background:${R_COLORS[k]}"></i>${l}</span>`).join('') + '<span><i style="background:var(--none)"></i>No results yet</span>' + (rkind === 'H' ? `<span><i style="background:${split(0.5)}"></i>Split delegation</span>` : '');
   d3.selectAll('path.st')
     .attr('fill', f => { const rs = g.get(f.properties.name); if (!rs) return 'var(--none)'; if (rs.length === 1) return rColor(rs[0]);
-      const n = s => rs.filter(r => rSide(r) === s).length; return color((n('D') - n('R')) / rs.length * 3); }) // House: net seats led, on the forecast scale
+      const n = s => rs.filter(r => rSide(r) === s).length; return n('D') + n('R') ? split(n('D') / (n('D') + n('R'))) : 'var(--none)'; }) // House: D share of seats called + led; not the forecast scale, whose middle is the yellow 'Tossup'
     .classed('sel', f => f.properties.name === sel)
     .select('title').text(f => (g.get(f.properties.name) ?? []).map(r => `${rLabel(r)}: ${rLead(r) ? `${rLead(r).name} (${rParty(rLead(r).party)}) ${rLead(r).pct}%${r.called ? ' · called' : ''}` : 'no votes yet'} · ${Math.round(r.pctIn ?? 0)}% in`).join('\n') || `${f.properties.name}: no race`);
   const k = s => rows.filter(r => r.called && rParty(r.winnerParty) === s).length, l = s => rows.filter(r => !r.called && rSide(r) === s).length;
@@ -375,7 +376,7 @@ function paintTimeline() { // color the map as of capture tIdx, for the office p
   const at = n => { // [fill, hover text] for state n, or null
     if (tKind === 'E') { const c = h.ev?.[n], v = c && EV.has(n) ? MODES.share.val({ ...EV.get(n), cast: c }) : null; return v == null ? null : [evColor(v), `${fmt(c)} early votes, ${pct(v)} of the 2022 vote`]; }
     if (tKind === 'H') { const s = h.hs?.[n]; if (!s) return null; const d = s[0] + s[1], r = s[2] + s[3];
-      return [color((d - r) / (d + r) * 3), `House: D ${s[0]} called + ${s[1]} leading, R ${s[3]} called + ${s[2]} leading`]; }
+      return [d + r ? split(d / (d + r)) : "var(--none)", `House: D ${s[0]} called + ${s[1]} leading, R ${s[3]} called + ${s[2]} leading`]; }
     const c = h.call?.[`${tKind}:${n}`], p = h.race[`${tKind}:${n}`] ?? h.race[`${tKind}:${n} (special)`];
     return c ? [R_COLORS[(c === c.toUpperCase() ? 'called' : 'lead') + c.toUpperCase()], `${c === c.toUpperCase() ? 'called' : 'leading'} ${c.toUpperCase()}`]
       : p != null ? [tOdds(p), `market P(D) ${pct(p)}`] : null; };
@@ -384,7 +385,7 @@ function paintTimeline() { // color the map as of capture tIdx, for the office p
   document.querySelectorAll('#scrub [data-k]').forEach(b => b.setAttribute('aria-pressed', b.dataset.k === tKind));
   document.getElementById('tslide').value = tIdx;
   document.getElementById('legend').innerHTML = (tKind === 'E' ? MODES.share.stops.map(v => `<span><i style="background:${evColor(v)}"></i>${pct(v)}</span>`).join('') + '<span>early votes as a share of the 2022 vote</span>'
-    : tKind === 'P' ? oddsLegend + '<span>2028 state markets</span>' : tKind === 'H' ? [[-3, 'All R'], [0, 'Even'], [3, 'All D']].map(([v, l]) => `<span><i style="background:${color(v)}"></i>${l}</span>`).join('') + '<span>House seats called + leading, by state</span>'
+    : tKind === 'P' ? oddsLegend + '<span>2028 state markets</span>' : tKind === 'H' ? [[0, 'All R'], [0.5, 'Even'], [1, 'All D']].map(([v, l]) => `<span><i style="background:${split(v)}"></i>${l}</span>`).join('') + '<span>House seats called + leading, by state</span>'
     : resLegend + oddsLegend.replace('Market', 'Before votes: market')) + '<span><i style="background:var(--none)"></i>No data</span>';
   const r = h.res[tKind];
   document.getElementById('tlabel').innerHTML = `<b>${new Date(h.t).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</b>${h.bf ? ' <span class="pill" style="padding:0 6px;font-size:11px">backfill: markets + early vote only</span>' : ''} · `

@@ -7,11 +7,19 @@
 [![Open issues](https://img.shields.io/github/issues/Tom-Neverwinter/election-tracker)](https://github.com/Tom-Neverwinter/election-tracker/issues)
 [![Repo size](https://img.shields.io/github/repo-size/Tom-Neverwinter/election-tracker)](https://github.com/Tom-Neverwinter/election-tracker)
 
+[![Senate](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FTom-Neverwinter%2Felection-tracker%2Fmain%2Fbadges%2Fsenate.json)](https://tom-neverwinter.github.io/election-tracker/#results)
+[![House](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FTom-Neverwinter%2Felection-tracker%2Fmain%2Fbadges%2Fhouse.json)](https://tom-neverwinter.github.io/election-tracker/#results)
+[![Governors](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FTom-Neverwinter%2Felection-tracker%2Fmain%2Fbadges%2Fgovernors.json)](https://tom-neverwinter.github.io/election-tracker/#results)
+[![Votes counted](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FTom-Neverwinter%2Felection-tracker%2Fmain%2Fbadges%2Fvotes.json)](https://tom-neverwinter.github.io/election-tracker/#early)
+[![Ballot measures](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FTom-Neverwinter%2Felection-tracker%2Fmain%2Fbadges%2Fmeasures.json)](https://tom-neverwinter.github.io/election-tracker/#measures)
+[![States certified](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FTom-Neverwinter%2Felection-tracker%2Fmain%2Fbadges%2Fcertified.json)](https://tom-neverwinter.github.io/election-tracker/#results)
+[![Who voted](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FTom-Neverwinter%2Felection-tracker%2Fmain%2Fbadges%2Fwhovoted.json)](https://tom-neverwinter.github.io/election-tracker/#demo)
+
 A single-page tracker for US elections: the 2026 midterms as they were forecast, voted and counted, plus election history back to 1789.
 
 **Live site: <https://tom-neverwinter.github.io/election-tracker/>**
 
-Every badge above is live: site reachability, the GitHub Pages deployment, and repository activity as reported by GitHub. "Data updated" is the time of the last commit, which is normally the hourly data capture.
+Every badge above is live. The first row is site reachability, the GitHub Pages deployment and repository activity as reported by GitHub; "Data updated" is the time of the last commit, normally the hourly data capture. The second row is the election itself: seats called (including seats not on the 2026 ballot), votes counted, measures decided, states certified and North Carolina counties that have posted who voted. `badges.js` rewrites those numbers in `badges/` every hour, and shields.io may cache them for a few minutes.
 
 ## What's on the page
 
@@ -23,6 +31,7 @@ Every badge above is live: site reachability, the GitHub Pages deployment, and r
 | Timeline | Hour-by-hour captures of odds, projected seats, early votes and race calls |
 | Early vote | Ballots cast before Election Day by state, per eligible voter and against 2022 |
 | Measures | Statewide ballot measures: 2026 with results, and past years |
+| Who voted | Turnout by age, race, ethnicity, party and sex, statewide and by county, from states that publish voter-level counts (North Carolina so far) |
 | States | Party control of each state government and trifectas, 1776 to today |
 | History | Turnout by state for any two elections from 1980 to 2024, and national turnout since 1789 |
 
@@ -39,8 +48,10 @@ There is no build step and no server. `index.html` is the whole app; it loads D3
 | --- | --- | --- |
 | `snapshot.js` | `history.js` (one forecast snapshot per day) | everything `data.js` loads |
 | `results.js` | `results-data.js` | NBC News results (Associated Press vote data) |
-| `measures-results.js` | `measures-results-data.js` | Wikipedia, 2026 United States ballot measures |
+| `measures-results.js` | `measures-results-data.js` | Wikipedia's 2026 ballot measures table, NBC News, and each measure's Wikipedia page |
 | `legislature-results.js` | `legislature-results-data.js` | Wikipedia, 2026 state legislative elections |
+| `state-demo.js` | `state-demo-data.js` | North Carolina State Board of Elections voter and history stats |
+| `badges.js` | `badges/*.json` (README badges) | the data files above |
 | `hourly-index.js` | `hourly/index.js` (compact summary of every capture) | `hourly/*.json` |
 | `hourly.js` | runs all of the above, then commits and pushes | |
 

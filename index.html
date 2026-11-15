@@ -52,7 +52,7 @@
 
   <div class="bar">
     <div class="tabs" role="group" aria-label="Offices"><button data-o="president">President</button><button data-o="senate">Senate</button><button data-o="house">House</button><button data-o="governor">Governor</button></div>
-    <div class="tabs" role="group" aria-label="Election 2026"><button data-o="results">Results</button><button data-o="timeline">Timeline</button><button data-o="early">Early vote</button><button data-o="measures">Measures</button></div>
+    <div class="tabs" role="group" aria-label="Election 2026"><button data-o="results">Results</button><button data-o="timeline">Timeline</button><button data-o="early">Early vote</button><button data-o="measures">Measures</button><button data-o="demo">Who voted</button></div>
     <div class="tabs" role="group" aria-label="Background"><button data-o="states">States</button><button data-o="history">History</button></div>
     <select class="pill" id="year" aria-label="Election year" style="color:inherit" hidden></select>
     <select class="pill" id="cmp" aria-label="Compare turnout with" style="color:inherit" hidden></select>
@@ -95,6 +95,7 @@
 <script src="districts.js"></script>
 <script src="measures.js"></script>
 <script src="measures-results-data.js"></script>
+<script src="state-demo-data.js"></script>
 <script src="legislature-results-data.js"></script>
 <script src="certification.js"></script>
 <script src="past/measures.js"></script>
@@ -195,7 +196,7 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
   geo = topojson.feature(us, us.objects.states).features;
   d3.select('#map').append('g').selectAll('path').data(geo).join('path')
     .attr('class', 'st').attr('d', d3.geoPath())
-    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (rkind === 'C' ? f.properties.name in CERT : (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name)) : office === 'early' ? EV.has(f.properties.name) : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (rkind === 'C' ? f.properties.name in CERT : (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name)) : office === 'early' ? EV.has(f.properties.name) : office === 'demo' ? !!window.STATE_DEMO?.[f.properties.name] : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
     .append('title');
   render();
 });
@@ -217,6 +218,7 @@ function render() {
   const rk = { senate: 'S', house: 'H', governor: 'G' }[office];
   if (rk && !isPast() && R?.day?.startsWith(String(new Date().getFullYear())) && R.races.some(r => r.votes)) { rkind = rk; return renderResults(); } // ponytail: once votes are in, the forecast tabs show results; the old forecast stays in each race's detail and the Timeline
   if (office === 'measures') return renderMeasures();
+  if (office === 'demo') return renderDemo();
   if (office === 'timeline') return renderTimeline();
   if (office === 'states') return renderStates();
   if (isPast()) return renderPast();
@@ -315,33 +317,34 @@ function renderResults() {
 
 // ---- Results tab, Certification view: each state's deadline to make the Nov 3 results official (certification.js) ----
 const CERT = window.CERT ?? {};
-const CERT_KEYS = { done: ['Certified', '#2f9e44'], past: ['Deadline passed', '#8fd19e'], due: ['Deadline ahead', '#e6bb5c'], none: ['No fixed deadline', 'var(--none)'] };
+const CERT_KEYS = { done: ['Certified', '#2f9e44'], official: ['Official results posted', '#5fbf74'], past: ['Deadline passed', '#8fd19e'], due: ['Deadline ahead', '#e6bb5c'], none: ['No fixed deadline', 'var(--none)'] };
 const dShort = iso => iso ? new Date(iso + 'T12:00').toLocaleDateString([], { month: 'short', day: 'numeric' }) : '—';
 function certStatus(c) { // ponytail: no public feed of completed certifications, so "Certified" only comes from a hand-entered certified date; otherwise it's the calendar
   if (c.certified) return { key: 'done', label: 'Certified ' + dShort(c.certified) };
+  if (c.official) return { key: 'official', label: 'Official results posted' }; // state labels results official, but no certification announced
   if (!c.state) return { key: 'none', label: 'No fixed deadline' };
   const left = Math.floor((new Date(c.state + 'T23:59:59') - Date.now()) / 864e5);
   return left < 0 ? { key: 'past', label: 'Deadline passed' } : { key: 'due', label: left ? `Due in ${left} day${left > 1 ? 's' : ''}` : 'Due today' };
 }
 function renderCert() {
-  const rows = Object.entries(CERT).map(([name, c]) => ({ name, local: c.local, due: c.state, rule: c.rule, localRule: c.localRule, src: c.certSource, st: certStatus(c), status: certStatus(c).label }));
+  const rows = Object.entries(CERT).map(([name, c]) => ({ name, local: c.local, due: c.state, rule: c.rule, localRule: c.localRule, src: c.certSource, off: c.official, dueText: c.state ? dShort(c.state) : c.dueNote ?? 'No fixed deadline', localText: c.local ? dShort(c.local) : c.localNote ?? '—', st: certStatus(c), status: certStatus(c).label }));
   const g = new Map(rows.map(r => [r.name, r])), n = k => rows.filter(r => r.st.key === k).length, el = document.getElementById('detail');
   const used = Object.entries(CERT_KEYS).filter(([k]) => n(k));
   document.getElementById('legend').innerHTML = used.map(([, [l, c]]) => `<span><i style="background:${c}"></i>${l}</span>`).join('');
   d3.selectAll('path.st').attr('fill', f => g.has(f.properties.name) ? CERT_KEYS[g.get(f.properties.name).st.key][1] : 'var(--none)').classed('sel', f => f.properties.name === sel)
-    .select('title').text(f => { const r = g.get(f.properties.name); return r ? `${r.name}: ${r.status} · state deadline ${dShort(r.due)}` : f.properties.name; });
+    .select('title').text(f => { const r = g.get(f.properties.name); return r ? `${r.name}: ${r.status} · state certification by ${r.dueText}` : f.properties.name; });
   document.getElementById('seats').innerHTML = used.map(([k, [l, c]]) => `<div style="flex:${n(k)};background:${c};color:${fg(c)}" title="${l}: ${n(k)}">${n(k)}</div>`).join('');
   const r = sel && g.get(sel);
   if (r) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(r.name)} · certification</h2><div style="margin:8px 0;font-size:18px;font-weight:600;color:${CERT_KEYS[r.st.key][1]}">${esc(r.status)}</div>
-    <div>County / local canvass by <b>${dShort(r.local)}</b></div><div class="sub">${esc(r.localRule)}</div>
-    <div style="margin-top:8px">State certification by <b>${dShort(r.due)}</b></div><div class="sub">${esc(r.rule)}</div>${r.src ? `<div class="sub" style="margin-top:6px">Certified: <a href="${esc(r.src)}" target="_blank" rel="noopener">source</a></div>` : ''}`;
+    <div>County results due <b>${esc(r.localText)}</b></div><div class="sub">${esc(r.localRule)}</div>
+    <div style="margin-top:8px">State certification by <b>${esc(r.dueText)}</b></div><div class="sub">${esc(r.rule)}</div>${r.src ? `<div class="sub" style="margin-top:6px">Certified: <a href="${esc(r.src)}" target="_blank" rel="noopener">source</a></div>` : ''}${r.off ? `<div class="sub" style="margin-top:6px">The state's results page says "Official", but no certification was announced: <a href="${esc(r.off)}" target="_blank" rel="noopener">results page</a></div>` : ''}`;
   else el.innerHTML = `<h2 style="margin:0;font-size:18px">Certifying the Nov 3 results</h2><div class="sub">Race calls are projections. A result is official once the state certifies it.</div>
     <div style="margin:8px 0">${used.map(([k, [l]]) => `${l} ${n(k)}`).join(' · ')}</div>
     <b>Next deadlines</b>${sorted(rows.filter(x => x.st.key === 'due'), x => x.due).slice(0, 8).map(x => `<div class="sub" style="display:flex;justify-content:space-between"><span>${esc(x.name)}</span><span>${dShort(x.due)} · ${x.status.toLowerCase()}</span></div>`).join('') || '<div class="sub">None left.</div>'}
-    <p class="sub">"Deadline passed" means the legal date has gone by, not that certification is confirmed: no one publishes a live list, so "Certified" shows only for states confirmed by hand. Click a state for its rule.</p>`;
-  head([['name', 'State'], ['local', 'Local canvass by'], ['due', 'State certification by'], ['status', 'Status'], [null, 'State rule']], 'Earliest state deadline first. Dates are legal deadlines or targets; some states certify earlier, and recounts can push them later.');
+    <p class="sub">"Deadline passed" means the legal date has gone by, not that certification is confirmed: no one publishes a live list, so "Certified" shows only for states confirmed by hand. "Official results posted" = the state labels its results official but hasn't announced certification. Some states set no fixed deadline (e.g. they wait for recounts). Click a state for its rule.</p>`;
+  head([['name', 'State'], ['local', 'County results due'], ['due', 'State certification by'], ['status', 'Status'], [null, 'State rule']], 'Earliest state deadline first. Dates are legal deadlines or targets; some states certify earlier, and recounts can push them later.');
   const tb = document.getElementById('rows');
-  tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? x.due ?? '9' : x[sortKey] ?? '9').map(x => `<tr data-s="${esc(x.name)}"><td style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${CERT_KEYS[x.st.key][1]}"></span> <b>${esc(x.name)}</b></td><td>${dShort(x.local)}</td><td>${dShort(x.due)}</td><td style="white-space:nowrap">${esc(x.status)}</td><td class="sub">${esc(x.rule)}</td></tr>`).join('');
+  tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? x.due ?? '9' : x[sortKey] ?? '9').map(x => `<tr data-s="${esc(x.name)}"><td style="white-space:nowrap"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${CERT_KEYS[x.st.key][1]}"></span> <b>${esc(x.name)}</b></td><td>${esc(x.localText)}</td><td>${esc(x.dueText)}</td><td style="white-space:nowrap">${esc(x.status)}</td><td class="sub">${esc(x.rule)}</td></tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   document.getElementById('srcs').innerHTML = 'Sources: certification deadlines from <a href="https://usafacts.org/articles/the-viz-lab/election-certification/">USAFacts</a>, compiled from the <a href="https://www.ncsl.org/elections-and-campaigns/election-certification-deadlines">National Conference of State Legislatures</a> and state election offices.';
 }
@@ -354,6 +357,41 @@ const PASTM = window.MEASURES_PAST ?? []; // past years: {year, state, name, des
 const MEAS_NOW = 2026;
 const measYears = () => [...new Set(PASTM.map(m => m.year))].sort((a, b) => b - a);
 const passColor = d3.scaleSequential([0, 1], d3.interpolateRdYlGn); // share of a state's measures that passed
+// ---- Who voted: turnout by age, race, party and sex, from states that publish it (state-demo-data.js, built by state-demo.js) ----
+const SD = window.STATE_DEMO ?? {}, sdColor = d3.scaleSequential([0.3, 0.7], d3.interpolateGreens).clamp(true);
+const DIMS = [['age', 'Age'], ['race', 'Race'], ['ethnicity', 'Ethnicity'], ['party', 'Party registration'], ['sex', 'Sex']];
+const AGE_ORDER = ['18 - 25', '26 - 40', '41 - 65', 'Over 66'];
+function renderDemo() {
+  if (!SD[sel]) sel = Object.keys(SD)[0];
+  const d = SD[sel], el = document.getElementById('detail'), t = g => g.reg ? g.voted / g.reg : 0;
+  document.getElementById('legend').innerHTML = [0.3, 0.4, 0.5, 0.6, 0.7].map(v => `<span><i style="background:${sdColor(v)}"></i>${pct(v)}${v === 0.7 ? '+' : ''}</span>`).join('') + '<span><i style="background:var(--none)"></i>No detailed data yet</span> <span>turnout of registered voters, counties that have posted</span>';
+  d3.selectAll('path.st').attr('fill', f => SD[f.properties.name] ? sdColor(t(SD[f.properties.name].state)) : 'var(--none)').classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => { const x = SD[f.properties.name]; return x ? `${f.properties.name}: ${pct1(t(x.state))} of registered voters voted (${x.countiesIn} of ${x.countiesAll} counties posted)` : `${f.properties.name}: no voter-level data yet`; });
+  document.getElementById('seats').innerHTML = '';
+  if (!d) { el.innerHTML = '<div class="sub">No state data loaded.</div>'; return; }
+  const S = d.state, mTot = d3.sum(Object.values(S.method));
+  const bars = (dim) => { let rows = Object.entries(S.by[dim] ?? {}).filter(([k, g]) => k && g.reg >= 500); // tiny groups make noisy rates
+    rows = dim === 'age' ? rows.sort((a, b) => AGE_ORDER.indexOf(a[0]) - AGE_ORDER.indexOf(b[0])) : rows.sort((a, b) => b[1].voted - a[1].voted);
+    return rows.map(([k, g]) => `<div style="display:grid;grid-template-columns:120px 1fr 74px;gap:8px;align-items:center;font-size:13px;margin:2px 0"><span>${esc(k)}</span>
+      <div style="background:var(--none);border-radius:3px;height:14px"><div style="width:${t(g) * 100}%;height:100%;border-radius:3px;background:${sdColor(t(g))}"></div></div>
+      <span style="white-space:nowrap"><b>${pct(t(g))}</b> <span class="sub">· ${g.voted / S.voted < 0.005 ? '<1%' : pct(g.voted / S.voted)}</span></span></div>`).join(''); };
+  el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(sel)} · who voted</h2>
+    <div style="font-size:26px;font-weight:700">${pct1(t(S))}</div><div class="sub">${fmt(S.voted)} of ${fmt(S.reg)} registered voters in the ${d.countiesIn} of ${d.countiesAll} counties that have posted voter history</div>
+    ${d.countiesIn < d.countiesAll ? `<div class="warn">Partial: ${d.countiesAll - d.countiesIn} counties haven't posted who voted yet, so this mix can tilt toward the counties that have. It fills in as they post.</div>` : ''}
+    <div class="seats" style="margin-top:8px" title="how ballots were cast">${Object.entries(S.method).sort((a, b) => b[1] - a[1]).map(([m, n], i) => `<div style="flex:${n};background:${['#2f9e44', '#69c37f', '#a9dcb4', '#d7eedc'][i] ?? '#eee'};color:${i < 2 ? '#fff' : '#111'}" title="${esc(m)}: ${fmt(n)}">${n / mTot > 0.08 ? `${esc(m)} ${pct(n / mTot)}` : ''}</div>`).join('')}</div>
+    ${DIMS.map(([k, l]) => `<div style="margin-top:10px"><b>${l}</b> <span class="sub">turnout · share of all voters</span>${bars(k)}</div>`).join('')}
+    <p class="sub">Turnout here = voted ÷ registered (not ÷ eligible). Groups under 500 registered voters are left out. ${esc(d.note)}</p>`;
+  const rows = Object.entries(d.counties).map(([name, c]) => { const g = (dim, k) => c.by[dim]?.[k], r = (dim, k) => g(dim, k)?.reg ? g(dim, k).voted / g(dim, k).reg : null;
+    return { name, reg: c.reg, voted: c.complete ? c.voted : null, turnout: c.complete ? t(c) : null, young: c.complete ? r('age', '18 - 25') : null, old: c.complete ? r('age', 'Over 66') : null,
+      dem: c.complete ? r('party', 'Democratic') : null, rep: c.complete ? r('party', 'Republican') : null, una: c.complete ? r('party', 'Unaffiliated') : null, status: c.complete ? 'Posted' : 'Not posted yet' }; });
+  head([['name', 'County'], ['reg', 'Registered'], ['voted', 'Voted'], ['turnout', 'Turnout'], ['young', 'Age 18–25'], ['old', 'Age 66+'], ['dem', 'Dem'], ['rep', 'Rep'], ['una', 'Unaffiliated'], ['status', 'Voter history']],
+    'Turnout of registered voters by county and group. Counties that have not posted who voted are listed without rates.');
+  const tb = document.getElementById('rows'), p = v => v == null ? '—' : pct(v);
+  tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? -(x.turnout ?? -1) : x[sortKey] ?? -1).map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${fmt(x.reg)}</td><td>${num(x.voted)}</td>
+    <td>${x.turnout == null ? '—' : `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sdColor(x.turnout)}"></span> <b>${pct(x.turnout)}</b>`}</td><td>${p(x.young)}</td><td>${p(x.old)}</td><td>${p(x.dem)}</td><td>${p(x.rep)}</td><td>${p(x.una)}</td><td class="sub">${x.status}</td></tr>`).join('');
+  document.getElementById('srcs').innerHTML = Object.entries(SD).map(([st, x]) => `${esc(st)}: <a href="${esc(x.url)}">${esc(x.source)}</a>`).join(' · ') + '. More states are added as they publish voter-level files.';
+}
+
 function renderMeasures() {
   const now = year === MEAS_NOW, list = now ? MEAS : PASTM.filter(m => m.year === year);
   const g = d3.group(list, m => m.state), el = document.getElementById('detail');
@@ -901,7 +939,7 @@ function head(cols, note) { // cols: [key|null, label]
   const tr = document.getElementById('thead');
   tr.innerHTML = cols.map(([k, l]) => `<th${k ? ` data-k="${k}" tabindex="0"` : ''}>${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
   tr.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
-    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory, results: renderResults, measures: renderMeasures, states: renderStates, timeline: renderTimeline }[office] ?? renderTable)();
+    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory, results: renderResults, measures: renderMeasures, demo: renderDemo, states: renderStates, timeline: renderTimeline }[office] ?? renderTable)();
   });
 }
 new MutationObserver(() => document.querySelectorAll('#rows tr[data-s]').forEach(tr => tr.tabIndex = 0)).observe(document.getElementById('rows'), { childList: true });

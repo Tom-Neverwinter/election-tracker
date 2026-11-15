@@ -98,6 +98,8 @@
 <script src="measures-results-data.js"></script>
 <script src="state-demo-data.js"></script>
 <script src="eligible-data.js"></script>
+<script src="cps-data.js"></script>
+<script src="state-past-data.js"></script>
 <script src="legislature-results-data.js"></script>
 <script src="certification.js"></script>
 <script src="past/measures.js"></script>
@@ -367,6 +369,33 @@ const ageStart = k => +(k.match(/\d+/)?.[0] ?? 999); // '18 - 25', '18-24', 'Ove
 const SDS = window.STATE_DEMO_STATUS ?? {};
 const ageLabel = k => k.replace(/^Over (\d+)$/, '$1+').replace(/\s*-\s*/, '–'); // 'Over 66' → '66+', '18 - 25' → '18–25'
 const EL = window.ELIGIBLE ?? {};
+// Past elections, every state: Census CPS voting supplement (cps-data.js, built by cps.js). Self-reported, so it runs above actual turnout.
+const CPS = window.CPS ?? {}, CPS_YEARS = ['2016', '2018', '2020', '2022', '2024'], MIDTERM = y => +y % 4 === 2;
+const CPS_GROUPS = [['Total', 'All citizens'], ['18–24'], ['25–34'], ['35–44'], ['45–64'], ['65+'], ['Female'], ['Male'], ['White (not Hispanic)'], ['Black'], ['Hispanic'], ['Asian']];
+// Past elections from the state's own records (state-past-data.js, built by `node state-demo.js --past`): exact counts, turnout of registered voters.
+const SP = window.STATE_PAST ?? {};
+function statePastTable(st) {
+  const P = SP[st]; if (!P) return '';
+  const years = Object.keys(P).sort(), t = g => g?.reg ? g.voted / g.reg : null, rows = [['All registered', y => P[y], true]];
+  for (const [dim, l] of DIMS) {
+    const keys = [...new Set(years.flatMap(y => Object.keys(P[y].by[dim] ?? {})))].filter(k => k && years.every(y => (P[y].by[dim]?.[k]?.reg ?? 0) >= 500)); // in every year, big enough to be stable
+    if (!keys.length) continue;
+    keys.sort(dim === 'age' ? (a, b) => ageStart(a) - ageStart(b) : (a, b) => P[years.at(-1)].by[dim][b].voted - P[years.at(-1)].by[dim][a].voted);
+    rows.push([l, null, true], ...keys.map(k => [dim === 'age' ? ageLabel(k) : k, y => P[y].by[dim][k]]));
+  }
+  return `<div style="margin-top:12px"><b>Past elections: state records</b> <span class="sub">% of registered voters who voted, exact counts</span>
+    <div class="pastscroll" style="overflow-x:auto"><table style="width:100%;font-size:12px;margin-top:4px;border-collapse:collapse;white-space:nowrap"><tr><td style="position:sticky;left:0;background:var(--card);padding-right:6px"></td>${years.map(y => `<td style="text-align:right;font-weight:${MIDTERM(y) ? 700 : 400}">${y}${MIDTERM(y) ? '*' : ''}</td>`).join('')}</tr>
+    ${rows.map(([l, get, head]) => `<tr><td style="position:sticky;left:0;background:var(--card);padding-right:6px${head ? ';font-weight:600;padding-top:4px' : ''}">${esc(l)}</td>${get ? years.map(y => { const v = t(get(y)); return `<td style="text-align:right${head ? ';font-weight:600' : ''}">${v == null ? '—' : pct(v)}</td>`; }).join('') : years.map(() => '<td></td>').join('')}</tr>`).join('')}</table></div>
+    <div class="sub" style="margin-top:4px">* Midterms. From ${esc(st)}'s own voter records for each general election, so these are actual counts, not survey estimates. Turnout here is of registered voters.</div></div>`;
+}
+function cpsTable(st) {
+  const c = CPS[st]; if (!c) return '';
+  const cell = v => v?.pct == null ? '<td class="sub" style="text-align:right">—</td>' : `<td style="text-align:right${v.moe > 8 ? ';opacity:.5' : ''}" title="±${v.moe} points">${Math.round(v.pct)}%</td>`;
+  return `<div style="margin-top:12px"><b>Past elections</b> <span class="sub">% of citizens who said they voted</span>
+    <table style="width:100%;font-size:12px;margin-top:4px;border-collapse:collapse"><tr><td></td>${CPS_YEARS.map(y => `<td style="text-align:right;font-weight:${MIDTERM(y) ? 700 : 400}">${y}${MIDTERM(y) ? '*' : ''}</td>`).join('')}</tr>
+    ${CPS_GROUPS.filter(([g]) => CPS_YEARS.some(y => c[y]?.[g]?.pct != null)).map(([g, l]) => `<tr><td>${esc(l ?? g)}</td>${CPS_YEARS.map(y => cell(c[y]?.[g])).join('')}</tr>`).join('')}</table>
+    <div class="sub" style="margin-top:4px">* Midterms, the closest comparison to 2026. From the Census Bureau's survey after each election: self-reported, so it runs a few points above actual turnout. Faded = margin of error over ±8 points (hover for it); — = too few people surveyed.</div></div>`;
+}
 const eTurn = st => counted(st) && POP[st] ? counted(st) / POP[st][1] : null; // 2026 votes counted ÷ citizens 18+ (same as the Early vote tab)
 function renderDemo() {
   const h = decodeURIComponent(hashYear ?? '');
@@ -392,7 +421,9 @@ function renderDemo() {
     ${DIMS.filter(([k]) => S.by[k]).map(([k, l]) => `<div style="margin-top:10px"><b>${l}</b> <span class="sub">turnout · share of all voters</span>${bars(k)}</div>`).join('')}
     ${DIMS.some(([k]) => !S.by[k]) ? `<div class="sub" style="margin-top:8px">${esc(sel)} doesn't publish turnout by ${DIMS.filter(([k]) => !S.by[k]).map(([, l]) => l.toLowerCase()).join(', ')}.</div>` : ''}
     <p class="sub">Turnout here = voted ÷ registered (not ÷ eligible). Groups under 500 registered voters are left out. ${esc(d.note)}</p>
+    ${statePastTable(sel)}${cpsTable(sel)}
     <details class="sub"><summary>Why the other ${Object.keys(SDS).length} states have no turnout by group</summary>${d3.groups(Object.entries(SDS), ([, why]) => why).sort((a, b) => a[1].length - b[1].length).map(([why, sts]) => `<div style="margin-top:6px"><b>${sts.map(([st]) => esc(st)).join(', ')}</b>: ${esc(why)}</div>`).join('')}<div style="margin-top:6px">From a survey of each state's election office on Nov 15, 2026; states are added as their files appear.</div></details>`;
+  el.querySelectorAll('.pastscroll').forEach(x => x.scrollLeft = x.scrollWidth); // newest years in view
   const ages = Object.keys(S.by.age ?? {}).filter(Boolean).sort((a, b) => ageStart(a) - ageStart(b));
   const COLS = [...(ages.length > 1 ? [['age', ages[0], 'Age ' + ageLabel(ages[0])], ['age', ages.at(-1), 'Age ' + ageLabel(ages.at(-1))]] : []), ['race', 'White', 'White'], ['race', 'Black', 'Black'], ['party', 'Democratic', 'Dem'], ['party', 'Republican', 'Rep'], ['party', 'Unaffiliated', 'Unaffiliated'], ['party', 'Other parties', 'Other parties']]
     .filter(([dim, k]) => S.by[dim]?.[k] && Object.values(d.counties).some(c => c.by[dim]?.[k])); // only groups this state publishes per county
@@ -417,7 +448,9 @@ function renderEligible(el) { // a state without turnout by group: its 2026 turn
     <div style="margin-top:10px"><b>Age</b> <span class="sub">share of eligible citizens</span>${bars(E.age, Object.keys(E.age))}</div>
     <div style="margin-top:10px"><b>Sex</b> <span class="sub">share of eligible citizens</span>${bars(E.sex)}</div>
     <div style="margin-top:10px"><b>Race and ethnicity</b> <span class="sub">share of eligible citizens</span>${bars(E.race)}</div>
-    <p class="sub">This is who <b>could</b> vote, not who did: citizens 18 and over from the Census Bureau's American Community Survey, 2020–2024. Hispanic can be any race, so race groups overlap. States with turnout by group are outlined on the map.</p>`;
+    <p class="sub">This is who <b>could</b> vote, not who did: citizens 18 and over from the Census Bureau's American Community Survey, 2020–2024. Hispanic can be any race, so race groups overlap. States with turnout by group are outlined on the map.</p>
+    ${statePastTable(sel)}${cpsTable(sel)}`;
+  el.querySelectorAll('.pastscroll').forEach(x => x.scrollLeft = x.scrollWidth); // newest years in view
   const rows = Object.entries(EL).map(([st, o]) => ({ st, elig: o.total, votes: counted(st) ?? null, turnout: eTurn(st), young: o.age['18–29'] / o.total, old: o.age['65+'] / o.total,
     white: o.race['White (not Hispanic)'] / o.total, black: o.race.Black / o.total, hisp: o.race['Hispanic (any race)'] / o.total, detail: SD[st] ? 'Yes' : 'Not yet' }));
   head([['st', 'State'], ['elig', 'Eligible citizens'], ['votes', 'Votes counted'], ['turnout', 'Turnout'], ['young', 'Age 18–29'], ['old', 'Age 65+'], ['white', 'White (not Hispanic)'], ['black', 'Black'], ['hisp', 'Hispanic'], ['detail', 'Turnout by group']],
@@ -427,7 +460,7 @@ function renderEligible(el) { // a state without turnout by group: its 2026 turn
     <td>${x.turnout == null ? '—' : `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sdColor(x.turnout)}"></span> <b>${pct(x.turnout)}</b>`}</td>
     <td>${pct(x.young)}</td><td>${pct(x.old)}</td><td>${pct(x.white)}</td><td>${pct(x.black)}</td><td>${pct(x.hisp)}</td><td class="sub">${x.detail}</td></tr>`).join('');
   tb.querySelectorAll('tr[data-s]').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
-  document.getElementById('srcs').innerHTML = 'Who could vote: <a href="https://www.census.gov/programs-surveys/acs/data/summary-file.html">Census Bureau American Community Survey 2020–2024</a> (tables B29001, B05003, B05003B–I). Turnout: votes counted (highest office) from NBC News/AP results. Turnout by group: ' + Object.entries(SD).map(([st, x]) => `<a href="${esc(x.url)}">${esc(st)}</a>`).join(', ') + '.';
+  document.getElementById('srcs').innerHTML = 'Who could vote: <a href="https://www.census.gov/programs-surveys/acs/data/summary-file.html">Census Bureau American Community Survey 2020–2024</a> (tables B29001, B05003, B05003B–I). Past elections: <a href="https://www.census.gov/topics/public-sector/voting/data/tables.html">Census Current Population Survey voting supplement</a>, Tables 4b and 4c, 2016–2024. Past elections from state records: North Carolina State Board of Elections (2020–2024), Washington Secretary of State (2010–2024). Turnout: votes counted (highest office) from NBC News/AP results. Turnout by group: ' + Object.entries(SD).map(([st, x]) => `<a href="${esc(x.url)}">${esc(st)}</a>`).join(', ') + '.';
 }
 
 function renderMeasures() {

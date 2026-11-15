@@ -26,7 +26,7 @@ try { require('./hourly-index.js').build(); } catch (e) { log('index failed: ' +
 run('git', ['add', 'history.js', 'results-data.js', 'measures-results-data.js', 'legislature-results-data.js', 'state-demo-data.js', 'badges', 'hourly']);
 if (require('child_process').spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: dir }).status === 1) { // 1 = something staged
   run('git', ['commit', '-q', '-m', `hourly ${stamp}`]);
-  run('git', ['pull', '-q', '--rebase']);
+  run('git', ['pull', '-q', '--rebase', '--autostash']); // autostash: uncommitted work in the folder must not block the hourly push
   log('push: ' + (run('git', ['push', '-q']) ?? 'FAILED'));
 }
 const res = load('results-data.js', 'window.RESULTS = '), races = (res?.races ?? []).filter(r => 'SGH'.includes(r.office));

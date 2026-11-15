@@ -2,7 +2,7 @@
 // Run: node state-demo.js. North Carolina's State Board posts, per county and precinct, registered voters (voter_stats) and voters who cast
 // a ballot (history_stats), each counted by age, race, ethnicity, sex and party. Turnout by group = voted ÷ registered.
 // Add a state by writing another loader that returns the same shape.
-const fs = require('fs'), path = require('path'), zlib = require('zlib');
+const fs = require('fs'), path = require('path'), { unzip, sheets } = require('./xlsx.js');
 const CACHE = path.join(__dirname, '.cache');
 
 async function download(url, file) { // into .cache/, fresh each run
@@ -13,39 +13,15 @@ async function download(url, file) { // into .cache/, fresh each run
   return file;
 }
 const zipText = async (url, file) => Object.values(unzip(fs.readFileSync(await download(url, file))))[0].toString('latin1'); // NC: one text file per zip
-function unzip(buf) { // every entry, via the central directory
-  const out = {}; let p = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); const n = buf.readUInt16LE(p + 10); p = buf.readUInt32LE(p + 16);
-  for (let i = 0; i < n; i++) { const method = buf.readUInt16LE(p + 10), size = buf.readUInt32LE(p + 20), nl = buf.readUInt16LE(p + 28), el = buf.readUInt16LE(p + 30), cl = buf.readUInt16LE(p + 32), off = buf.readUInt32LE(p + 42), name = buf.toString('utf8', p + 46, p + 46 + nl);
-    const start = off + 30 + buf.readUInt16LE(off + 26) + buf.readUInt16LE(off + 28), data = buf.subarray(start, start + size);
-    out[name] = method === 8 ? zlib.inflateRawSync(data) : data; p += 46 + nl + el + cl; }
-  return out;
-}
-const xmlText = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
-function sheets(file) { // {sheetName: [[cell, ...], ...]}
-  const z = unzip(fs.readFileSync(file)), wb = z['xl/workbook.xml'].toString(), rels = z['xl/_rels/workbook.xml.rels'].toString();
-  const shared = z['xl/sharedStrings.xml'] ? [...z['xl/sharedStrings.xml'].toString().matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => xmlText([...m[1].matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(t => t[1]).join(''))) : [];
-  const out = {};
-  for (const [, name, rid] of wb.matchAll(/<sheet [^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)) {
-    const target = rels.match(new RegExp(`Id="${rid}"[^>]*Target="([^"]+)"`))?.[1] ?? rels.match(new RegExp(`Target="([^"]+)"[^>]*Id="${rid}"`))?.[1];
-    const xml = z['xl/' + target.replace(/^\/?xl\//, '')].toString(), rows = [];
-    for (const [, r] of xml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) { const row = [];
-      for (const [, attrs, body] of r.matchAll(/<c ([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) { const col = attrs.match(/r="([A-Z]+)\d+"/)[1].split('').reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1, t = attrs.match(/t="(\w+)"/)?.[1];
-        const v = body?.match(/<v>([^<]*)<\/v>/)?.[1], is = body?.match(/<is>([\s\S]*?)<\/is>/)?.[1];
-        row[col] = t === 'inlineStr' ? xmlText([...(is ?? '').matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(m => m[1]).join('')) : t === 's' ? shared[+v] : t === 'str' ? xmlText(v ?? '') : v == null ? null : +v; }
-      rows.push(row); }
-    out[name] = rows; }
-  return out;
-}
-
 const RACE = { W: 'White', B: 'Black', A: 'Asian', I: 'American Indian', M: 'Two or more', O: 'Other', P: 'Pacific Islander', U: 'Not stated' };
 const ETH = { HL: 'Hispanic', NL: 'Not Hispanic', UN: 'Not stated' };
 const PARTY = { DEM: 'Democratic', REP: 'Republican', UNA: 'Unaffiliated', LIB: 'Libertarian', GRE: 'Green', NLB: 'No Labels', CST: 'Constitution', JFA: 'Justice For All' };
 const SEX = { F: 'Female', M: 'Male', U: 'Not stated' };
 const METHOD = { EV: 'Early in person', EC: 'Early in person', V: 'Election Day', C: 'Election Day', T: 'Election Day', M: 'Absentee by mail', P: 'Provisional' }; // EC/C = curbside, T = transfer
 
-async function northCarolina() {
-  const base = 'https://s3.amazonaws.com/dl.ncsbe.gov/ENRS/2026_11_03/', dir = path.join(CACHE, 'nc');
-  const [hist, reg, res] = await Promise.all(['history_stats_20261103', 'voter_stats_20261103', 'results_pct_20261103'].map(f => zipText(base + f + '.zip', path.join(dir, f + '.zip'))));
+async function northCarolina(folder = '2026_11_03') { // a past election's folder (e.g. '2022_11_08') loads that year, with every county's history complete
+  const base = `https://s3.amazonaws.com/dl.ncsbe.gov/ENRS/${folder}/`, dir = path.join(CACHE, 'nc'), stamp = folder.replace(/_/g, ''), past = folder !== '2026_11_03';
+  const [hist, reg, res] = await Promise.all(['history_stats_', 'voter_stats_', ...(past ? [] : ['results_pct_'])].map(f => zipText(base + f + stamp + '.zip', path.join(dir, f + stamp + '.zip'))));
   const rows = (text, need) => { const [head, ...lines] = text.split(/\r?\n/), h = head.split('\t'), at = Object.fromEntries(need.map(k => [k, h.indexOf(k)]));
     for (const k of need) if (at[k] < 0) throw new Error(`NC layout changed: no column ${k}`);
     return lines.filter(Boolean).map(l => { const c = l.split('\t'); return Object.fromEntries(need.map(k => [k, c[at[k]].trim()])); }); };
@@ -58,7 +34,8 @@ async function northCarolina() {
   for (const r of rows(hist, [...keys, 'voting_method'])) { const n = +r.total_voters, c = (counties[r.county_desc] ??= blank()); add(c, 'voted', r, n);
     const m = METHOD[r.voting_method] ?? r.voting_method; c.method[m] = (c.method[m] ?? 0) + n; }
   // Counties load voter history at their own pace; one counts only once its history covers 95% of its counted US Senate votes.
-  for (const r of rows(res, ['County', 'Contest Name', 'Total Votes'])) if (r['Contest Name'] === 'US SENATE' && counties[r.County]) counties[r.County].counted = (counties[r.County].counted ?? 0) + +r['Total Votes'];
+  if (past) for (const c of Object.values(counties)) c.counted = c.voted; // past elections: history is final
+  else for (const r of rows(res, ['County', 'Contest Name', 'Total Votes'])) if (r['Contest Name'] === 'US SENATE' && counties[r.County]) counties[r.County].counted = (counties[r.County].counted ?? 0) + +r['Total Votes'];
   const state = blank(), done = Object.entries(counties).filter(([, c]) => c.counted && c.voted >= 0.95 * c.counted);
   if (!done.length) throw new Error('NC: no county has posted voter history yet');
   for (const [, c] of done) { state.reg += c.reg; state.voted += c.voted;
@@ -99,13 +76,14 @@ async function louisiana() {
 
 // Washington's Secretary of State keeps one spreadsheet of registered voters and ballots by county × age × sex for every election.
 // The 2026 general rows exist but stay zero until the state certifies (about Dec 4); until then this throws and the state shows as pending.
-async function washington() {
-  const R = sheets(await download('https://www.sos.wa.gov/sites/default/files/2022-05/VoterParticipation.xlsx', path.join(CACHE, 'wa', 'vp.xlsx'))).Table;
+let waTable; // one download per run serves every year
+async function washington(year = 2026) {
+  const R = await (waTable ??= download('https://www.sos.wa.gov/sites/default/files/2022-05/VoterParticipation.xlsx', path.join(CACHE, 'wa', 'vp.xlsx')).then(f => sheets(f).Table));
   const h = R[0].map(x => String(x).trim()), at = k => { const i = h.indexOf(k); if (i < 0) throw new Error('WA layout changed: no ' + k); return i; };
   const [cI, yI, tI, aI] = ['County', 'Year', 'Election Type', 'Age'].map(at), SEX = { Female: 'Female', Male: 'Male', Unknown: 'Not stated' };
-  const rows = R.slice(1).filter(r => r[yI] == 2026 && r[tI] === 'General'), STATE = 'zWashington State';
+  const rows = R.slice(1).filter(r => r[yI] == year && r[tI] === 'General'), STATE = 'zWashington State';
   const total = rows.find(r => r[cI] === STATE && r[aI] === '0TOTAL');
-  if (!total || !(+total[at('Total Ballots')] > 0)) throw new Error('2026 general not posted yet');
+  if (!total || !(+total[at('Total Ballots')] > 0)) throw new Error(`${year} general not posted yet`);
   const counties = {};
   for (const r of rows) { if (r[aI] === '0TOTAL' || r[cI] === STATE) continue; // subtotal rows
     const c = (counties[r[cI]] ??= { reg: 0, voted: 0, method: {}, complete: true, by: {} });
@@ -113,7 +91,9 @@ async function washington() {
       c.reg += reg; c.voted += voted;
       for (const [dim, val] of [['age', r[aI] === '65-' ? '65+' : r[aI]], ['sex', sex]]) { const g = ((c.by[dim] ??= {})[val] ??= { reg: 0, voted: 0 }); g.reg += reg; g.voted += voted; } } }
   const state = rollup(counties);
-  if (state.voted !== +total[at('Total Ballots')]) throw new Error(`WA: counties add to ${state.voted}, state says ${total[at('Total Ballots')]}`);
+  const gap = Math.abs(state.voted - +total[at('Total Ballots')]); // the state's own sheet is off by 1 ballot in 2014; anything more means we misread it
+  if (gap > state.voted * 1e-4) throw new Error(`WA ${year}: counties add to ${state.voted}, state says ${total[at('Total Ballots')]}`);
+  if (gap) console.warn(`WA ${year}: counties add to ${state.voted}, the state's total row says ${total[at('Total Ballots')]} (source discrepancy of ${gap})`);
   return { source: 'Washington Secretary of State voter participation data', url: 'https://www.sos.wa.gov/elections/data-research/election-data-and-maps/reports-data-and-statistics',
     note: "Washington records age and sex but not race, and has no party registration. Registered voters are the state's estimate for the election period.",
     countiesIn: Object.keys(counties).length, countiesAll: Object.keys(counties).length, state, counties };
@@ -202,4 +182,18 @@ async function main() {
   fs.writeFileSync(path.join(__dirname, 'state-demo-data.js'), `// Built by state-demo.js on ${new Date().toISOString()}\nwindow.STATE_DEMO = ${JSON.stringify(out)};\nwindow.STATE_DEMO_STATUS = ${JSON.stringify(status)};\n`);
   for (const [st, d] of Object.entries(out)) console.log(`${st}: ${d.countiesIn} of ${d.countiesAll} counties complete; there ${d.state.voted.toLocaleString()} voted of ${d.state.reg.toLocaleString()} registered (${(d.state.voted / d.state.reg * 100).toFixed(1)}%)`);
 }
-if (require.main === module) main().catch(e => { console.error(e.message); process.exitCode = 1; });
+// Past general elections from the same state files (statewide totals by group). They never change, so they're built once: node state-demo.js --past
+const PAST = {
+  'North Carolina': [['2024', '2024_11_05'], ['2022', '2022_11_08'], ['2020', '2020_11_03']].map(([y, f]) => [y, () => northCarolina(f)]),
+  Washington: ['2024', '2022', '2020', '2018', '2016', '2014', '2012', '2010'].map(y => [y, () => washington(+y)]),
+};
+async function buildPast() {
+  const out = {};
+  for (const [st, years] of Object.entries(PAST)) for (const [y, load] of years)
+    for (let tries = 1; ; tries++) try { const { state: s } = await load(); ((out[st] ??= {})[y] = { reg: s.reg, voted: s.voted, by: s.by, method: s.method }); break; }
+      catch (e) { if (tries === 3) { console.warn(`skipped ${st} ${y}: ${e.message}`); break; } } // downloads occasionally drop
+  fs.writeFileSync(path.join(__dirname, 'state-past-data.js'), `// Built by state-demo.js --past on ${new Date().toISOString()}\nwindow.STATE_PAST = ${JSON.stringify(out)};\n`);
+  for (const [st, ys] of Object.entries(out)) console.log(`${st}: ${Object.entries(ys).map(([y, d]) => `${y} ${(d.voted / d.reg * 100).toFixed(1)}%`).join(' · ')}`);
+}
+
+if (require.main === module) (process.argv.includes('--past') ? buildPast() : main()).catch(e => { console.error(e.message); process.exitCode = 1; });

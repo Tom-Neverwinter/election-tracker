@@ -324,7 +324,7 @@ function certStatus(c) { // ponytail: no public feed of completed certifications
   return left < 0 ? { key: 'past', label: 'Deadline passed' } : { key: 'due', label: left ? `Due in ${left} day${left > 1 ? 's' : ''}` : 'Due today' };
 }
 function renderCert() {
-  const rows = Object.entries(CERT).map(([name, c]) => ({ name, local: c.local, due: c.state, rule: c.rule, localRule: c.localRule, st: certStatus(c), status: certStatus(c).label }));
+  const rows = Object.entries(CERT).map(([name, c]) => ({ name, local: c.local, due: c.state, rule: c.rule, localRule: c.localRule, src: c.certSource, st: certStatus(c), status: certStatus(c).label }));
   const g = new Map(rows.map(r => [r.name, r])), n = k => rows.filter(r => r.st.key === k).length, el = document.getElementById('detail');
   const used = Object.entries(CERT_KEYS).filter(([k]) => n(k));
   document.getElementById('legend').innerHTML = used.map(([, [l, c]]) => `<span><i style="background:${c}"></i>${l}</span>`).join('');
@@ -334,7 +334,7 @@ function renderCert() {
   const r = sel && g.get(sel);
   if (r) el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(r.name)} · certification</h2><div style="margin:8px 0;font-size:18px;font-weight:600;color:${CERT_KEYS[r.st.key][1]}">${esc(r.status)}</div>
     <div>County / local canvass by <b>${dShort(r.local)}</b></div><div class="sub">${esc(r.localRule)}</div>
-    <div style="margin-top:8px">State certification by <b>${dShort(r.due)}</b></div><div class="sub">${esc(r.rule)}</div>`;
+    <div style="margin-top:8px">State certification by <b>${dShort(r.due)}</b></div><div class="sub">${esc(r.rule)}</div>${r.src ? `<div class="sub" style="margin-top:6px">Certified: <a href="${esc(r.src)}" target="_blank" rel="noopener">source</a></div>` : ''}`;
   else el.innerHTML = `<h2 style="margin:0;font-size:18px">Certifying the Nov 3 results</h2><div class="sub">Race calls are projections. A result is official once the state certifies it.</div>
     <div style="margin:8px 0">${used.map(([k, [l]]) => `${l} ${n(k)}`).join(' · ')}</div>
     <b>Next deadlines</b>${sorted(rows.filter(x => x.st.key === 'due'), x => x.due).slice(0, 8).map(x => `<div class="sub" style="display:flex;justify-content:space-between"><span>${esc(x.name)}</span><span>${dShort(x.due)} · ${x.status.toLowerCase()}</span></div>`).join('') || '<div class="sub">None left.</div>'}
@@ -691,9 +691,10 @@ function presTug() { // tug of war: D pulls from the left by category, R from th
 function presCharts() {
   let best = 0; const evPts = []; // skip captures where most state markets failed to load (they'd fall back to 2024 and spike)
   for (const h of HR) { const n = Object.keys(h.race ?? {}).filter(k => k.startsWith('P:')).length; if (n >= 10 && n >= best * 0.8) evPts.push([new Date(h.t), evAt(h)]); best = Math.max(best, n); }
-  const s = [hrSeries(h => h.mkt.P, 'Polymarket', '#9b6bcc'), hrSeries(h => h.mkt.PK, 'Kalshi', '#38a169')];
+  const s = [hrSeries(h => h.mkt.P, 'D', 'var(--d)'), hrSeries(h => h.mkt.PR ?? (h.mkt.P != null ? 1 - h.mkt.P : null), 'R', 'var(--r)'), // older captures kept only the D price
+    hrSeries(h => h.mkt.PK, 'Kalshi D', '#9ec3ea'), hrSeries(h => h.mkt.PKR, 'Kalshi R', '#f0a8a8')];
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
-    ${tchart('Chance Democrats win 2028', s, { fmt: p => Math.round(p * 100) + '%', lo: 0, hi: 1, ref: 0.5 })}
+    ${tchart('Chance each party wins 2028', s,{ fmt: p => Math.round(p * 100) + '%', lo: 0, hi: 1, ref: 0.5 })}
     ${tchart('Electoral votes by state favorite (Polymarket)', [['D', 'var(--d)'], ['R', 'var(--r)']].map(([p, c]) => ({ name: p, color: c, pts: evPts.map(([t], i) => [t, d3.median(evPts.slice(Math.max(0, i - 2), i + 3), q => q[1][p])]) })) /* rolling median of 5 captures: new or thin markets blip through 50% for an hour */, { ref: 270 })}</div>`;
 }
 function horseshoe() { // 538 dots in a hemicycle, safest D on the left to safest R on the right

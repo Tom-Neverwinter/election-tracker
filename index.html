@@ -25,6 +25,9 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
   svg path.st { stroke:var(--bg); stroke-width:.8; cursor:pointer; }
   svg path.st:hover, svg path.st.sel { stroke:var(--ink); stroke-width:2; }
+  #map.cd path.st { fill:transparent; stroke:var(--line); }
+  svg g.cd circle { stroke:var(--bg); stroke-width:.6; cursor:pointer; }
+  svg g.cd circle:hover, svg g.cd circle.sel { stroke:var(--ink); stroke-width:1.5; }
   .legend { display:flex; gap:2px; margin-top:8px; font-size:12px; color:var(--mute); flex-wrap:wrap; }
   .legend span { display:inline-flex; align-items:center; gap:4px; margin-right:8px; }
   .legend i { width:14px; height:14px; border-radius:3px; display:inline-block; }
@@ -89,6 +92,7 @@
 <script src="past/house.js"></script>
 <script src="past/control.js"></script>
 <script src="results-data.js"></script>
+<script src="districts.js"></script>
 <script src="measures.js"></script>
 <script src="measures-results-data.js"></script>
 <script src="legislature-results-data.js"></script>
@@ -193,6 +197,7 @@ function render() {
   document.getElementById('rmodes').hidden = office !== 'results';
   document.getElementById('scrub').hidden = office !== 'timeline';
   if (office !== 'timeline') clearInterval(tPlay);
+  districtDots(null);
   renderFlow();
   if (office === 'early') return renderEarly();
   if (office === 'history') return renderHistory();
@@ -233,18 +238,33 @@ const split = d3.interpolateRgb(R_COLORS.calledR, R_COLORS.calledD); // D share 
 const rColor = r => { const s = rSide(r); return s ? R_COLORS[(r.called ? 'called' : 'lead') + s] : 'var(--none)'; };
 const rLabel = r => r.office === 'O' ? `${r.state} ${r.name}` : r.district != null ? `${r.state} ${r.district || 'at-large'}` : r.state;
 const forecastFor = r => (D[RKIND[r.office][0]]?.races ?? []).find(f => f.state === r.state && (r.office !== 'H' || f.label.endsWith('-' + (r.district || 'AL')))); // ponytail: Senate specials share a state; the first forecast row wins
+const CD_R = 8.5; let cdNodes; // House districts as equal dots, nudged apart from their real centers (Dorling cartogram)
+function districtDots(rows) { // rows = this year's House results, or null to hide the dots
+  const svg = d3.select('#map').classed('cd', !!rows), g = svg.selectAll('g.cd').data([0]).join('g').attr('class', 'cd');
+  if (!rows) return g.attr('display', 'none'); g.attr('display', null);
+  if (!cdNodes) { const p = d3.geoAlbersUsa().scale(1300).translate([487.5, 305]); // same projection as us-atlas states-albers-10m
+    cdNodes = CD.map(([state, district, lon, lat]) => { const [x, y] = p([lon, lat]); return { state, district, x, y, tx: x, ty: y }; });
+    const sim = d3.forceSimulation(cdNodes).force('x', d3.forceX(d => d.tx)).force('y', d3.forceY(d => d.ty)).force('c', d3.forceCollide(CD_R + 0.4)).stop();
+    for (let i = 0; i < 250; i++) sim.tick(); } // ponytail: runs once per page load (~435 nodes, a few ms); precompute if it ever gets slow
+  const by = new Map(rows.map(r => [`${r.state}|${r.district ?? 0}`, r])), at = d => by.get(`${d.state}|${d.district}`);
+  g.selectAll('circle').data(cdNodes).join(e => e.append('circle').call(c => c.append('title')))
+    .attr('cx', d => d.x).attr('cy', d => d.y).attr('r', CD_R).attr('fill', d => at(d) ? rColor(at(d)) : 'var(--none)')
+    .classed('sel', d => d.state === sel).on('click', (e, d) => { sel = d.state; render(); })
+    .select('title').text(d => { const r = at(d); return r ? `${rLabel(r)}: ${rLead(r) ? `${rLead(r).name} (${rParty(rLead(r).party)}) ${rLead(r).pct}%${r.called ? ' · called' : ''}` : 'no votes yet'} · ${Math.round(r.pctIn ?? 0)}% in` : `${d.state} ${d.district || 'at-large'}: no result`; });
+}
 function renderResults() {
   document.querySelectorAll('#rmodes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.r === rkind));
   if (rkind === 'C') return renderCert();
   const rows = (R?.races ?? []).filter(r => r.office === rkind), g = d3.group(rows, r => r.state);
   const el = document.getElementById('detail');
   document.getElementById('legend').innerHTML = [['calledD', 'Called D'], ['leadD', 'Leading D'], ['leadR', 'Leading R'], ['calledR', 'Called R'], ['calledO', 'Other']]
-    .map(([k, l]) => `<span><i style="background:${R_COLORS[k]}"></i>${l}</span>`).join('') + '<span><i style="background:var(--none)"></i>No results yet</span>' + (rkind === 'H' ? `<span><i style="background:${split(0.5)}"></i>Split delegation</span>` : '');
+    .map(([k, l]) => `<span><i style="background:${R_COLORS[k]}"></i>${l}</span>`).join('') + '<span><i style="background:var(--none)"></i>No results yet</span>' + (rkind === 'H' ? '<span>one dot per district, all the same size (districts have equal populations)</span>' : '');
   d3.selectAll('path.st')
     .attr('fill', f => { const rs = g.get(f.properties.name); if (!rs) return 'var(--none)'; if (rs.length === 1) return rColor(rs[0]);
       const n = s => rs.filter(r => rSide(r) === s).length; return n('D') + n('R') ? split(n('D') / (n('D') + n('R'))) : 'var(--none)'; }) // House: D share of seats called + led; not the forecast scale, whose middle is the yellow 'Tossup'
     .classed('sel', f => f.properties.name === sel)
     .select('title').text(f => (g.get(f.properties.name) ?? []).map(r => `${rLabel(r)}: ${rLead(r) ? `${rLead(r).name} (${rParty(rLead(r).party)}) ${rLead(r).pct}%${r.called ? ' · called' : ''}` : 'no votes yet'} · ${Math.round(r.pctIn ?? 0)}% in`).join('\n') || `${f.properties.name}: no race`);
+  if (rkind === 'H') districtDots(rows);
   const k = s => rows.filter(r => r.called && rParty(r.winnerParty) === s).length, l = s => rows.filter(r => !r.called && rSide(r) === s).length;
   document.getElementById('seats').innerHTML = [[k('D'), R_COLORS.calledD, 'Called D'], [l('D'), R_COLORS.leadD, 'Leading D'], [rows.filter(r => !rSide(r)).length, 'var(--none)', 'No votes'], [l('R'), R_COLORS.leadR, 'Leading R'], [k('R'), R_COLORS.calledR, 'Called R']]
     .filter(([n]) => n).map(([n, c, t]) => `<div style="flex:${n};background:${c};color:${fg(c)}" title="${t}: ${n}">${n}</div>`).join('');

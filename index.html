@@ -25,6 +25,7 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
   svg path.st { stroke:var(--bg); stroke-width:.8; cursor:pointer; }
   svg path.st:hover, svg path.st.sel { stroke:var(--ink); stroke-width:2; }
+  svg path.st.detail { stroke:var(--ink); stroke-width:1.4; stroke-dasharray:3 2; } /* Who voted: states with turnout by group */
   #map.cd path.st { fill:transparent; stroke:var(--line); }
   svg g.cd circle { stroke:var(--bg); stroke-width:.6; cursor:pointer; }
   svg g.cd circle:hover, svg g.cd circle.sel { stroke:var(--ink); stroke-width:1.5; }
@@ -96,6 +97,7 @@
 <script src="measures.js"></script>
 <script src="measures-results-data.js"></script>
 <script src="state-demo-data.js"></script>
+<script src="eligible-data.js"></script>
 <script src="legislature-results-data.js"></script>
 <script src="certification.js"></script>
 <script src="past/measures.js"></script>
@@ -196,7 +198,7 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
   geo = topojson.feature(us, us.objects.states).features;
   d3.select('#map').append('g').selectAll('path').data(geo).join('path')
     .attr('class', 'st').attr('d', d3.geoPath())
-    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (rkind === 'C' ? f.properties.name in CERT : (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name)) : office === 'early' ? EV.has(f.properties.name) : office === 'demo' ? !!window.STATE_DEMO?.[f.properties.name] : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (rkind === 'C' ? f.properties.name in CERT : (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name)) : office === 'early' ? EV.has(f.properties.name) : office === 'demo' ? !!window.ELIGIBLE?.[f.properties.name] : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
     .append('title');
   render();
 });
@@ -211,6 +213,7 @@ function render() {
   document.getElementById('scrub').hidden = office !== 'timeline';
   if (office !== 'timeline') clearInterval(tPlay);
   districtDots(null);
+  d3.selectAll('path.st').classed('detail', false); // only the Who voted tab outlines states
   renderFlow();
   if (office === 'early') return renderEarly();
   if (office === 'history') return renderHistory();
@@ -360,36 +363,71 @@ const passColor = d3.scaleSequential([0, 1], d3.interpolateRdYlGn); // share of 
 // ---- Who voted: turnout by age, race, party and sex, from states that publish it (state-demo-data.js, built by state-demo.js) ----
 const SD = window.STATE_DEMO ?? {}, sdColor = d3.scaleSequential([0.3, 0.7], d3.interpolateGreens).clamp(true);
 const DIMS = [['age', 'Age'], ['race', 'Race'], ['ethnicity', 'Ethnicity'], ['party', 'Party registration'], ['sex', 'Sex']];
-const AGE_ORDER = ['18 - 25', '26 - 40', '41 - 65', 'Over 66'];
+const ageStart = k => +(k.match(/\d+/)?.[0] ?? 999); // '18 - 25', '18-24', 'Over 66', '65+' all sort by their first number
+const SDS = window.STATE_DEMO_STATUS ?? {};
+const ageLabel = k => k.replace(/^Over (\d+)$/, '$1+').replace(/\s*-\s*/, '–'); // 'Over 66' → '66+', '18 - 25' → '18–25'
+const EL = window.ELIGIBLE ?? {};
+const eTurn = st => counted(st) && POP[st] ? counted(st) / POP[st][1] : null; // 2026 votes counted ÷ citizens 18+ (same as the Early vote tab)
 function renderDemo() {
-  if (!SD[sel]) sel = Object.keys(SD)[0];
+  const h = decodeURIComponent(hashYear ?? '');
+  if (!EL[sel] && !SD[sel]) sel = SD[h] || EL[h] ? h : Object.keys(SD)[0]; // #demo/Louisiana opens that state
   const d = SD[sel], el = document.getElementById('detail'), t = g => g.reg ? g.voted / g.reg : 0;
-  document.getElementById('legend').innerHTML = [0.3, 0.4, 0.5, 0.6, 0.7].map(v => `<span><i style="background:${sdColor(v)}"></i>${pct(v)}${v === 0.7 ? '+' : ''}</span>`).join('') + '<span><i style="background:var(--none)"></i>No detailed data yet</span> <span>turnout of registered voters, counties that have posted</span>';
-  d3.selectAll('path.st').attr('fill', f => SD[f.properties.name] ? sdColor(t(SD[f.properties.name].state)) : 'var(--none)').classed('sel', f => f.properties.name === sel)
-    .select('title').text(f => { const x = SD[f.properties.name]; return x ? `${f.properties.name}: ${pct1(t(x.state))} of registered voters voted (${x.countiesIn} of ${x.countiesAll} counties posted)` : `${f.properties.name}: no voter-level data yet`; });
+  document.getElementById('legend').innerHTML = [0.3, 0.4, 0.5, 0.6, 0.7].map(v => `<span><i style="background:${sdColor(v)}"></i>${pct(v)}${v === 0.7 ? '+' : ''}</span>`).join('') + '<span>2026 turnout of eligible citizens</span> <span><i style="background:none;border:1.4px dashed var(--ink)"></i>Outlined: turnout by age, race, party or sex available</span>';
+  d3.selectAll('path.st').attr('fill', f => eTurn(f.properties.name) != null ? sdColor(eTurn(f.properties.name)) : 'var(--none)').classed('sel', f => f.properties.name === sel).classed('detail', f => !!SD[f.properties.name])
+    .select('title').text(f => { const st = f.properties.name, x = SD[st], e = eTurn(st);
+      return `${st}: ${e != null ? pct1(e) + ' of eligible citizens voted' : 'no 2026 count yet'}` + (x ? ` · ${pct1(t(x.state))} of registered voters, with turnout by group` : ` · ${SDS[st] ?? 'no voter-level data yet'}`); });
   document.getElementById('seats').innerHTML = '';
-  if (!d) { el.innerHTML = '<div class="sub">No state data loaded.</div>'; return; }
-  const S = d.state, mTot = d3.sum(Object.values(S.method));
+  if (!d) return renderEligible(el);
+  const S = d.state, mTot = d3.sum(Object.values(S.method ?? {})), unit = d.unitName ?? 'county', units = unit === 'county' ? 'counties' : unit + 'es';
   const bars = (dim) => { let rows = Object.entries(S.by[dim] ?? {}).filter(([k, g]) => k && g.reg >= 500); // tiny groups make noisy rates
-    rows = dim === 'age' ? rows.sort((a, b) => AGE_ORDER.indexOf(a[0]) - AGE_ORDER.indexOf(b[0])) : rows.sort((a, b) => b[1].voted - a[1].voted);
+    rows = dim === 'age' ? rows.sort((a, b) => ageStart(a[0]) - ageStart(b[0])) : rows.sort((a, b) => b[1].voted - a[1].voted);
     return rows.map(([k, g]) => `<div style="display:grid;grid-template-columns:120px 1fr 74px;gap:8px;align-items:center;font-size:13px;margin:2px 0"><span>${esc(k)}</span>
       <div style="background:var(--none);border-radius:3px;height:14px"><div style="width:${t(g) * 100}%;height:100%;border-radius:3px;background:${sdColor(t(g))}"></div></div>
       <span style="white-space:nowrap"><b>${pct(t(g))}</b> <span class="sub">· ${g.voted / S.voted < 0.005 ? '<1%' : pct(g.voted / S.voted)}</span></span></div>`).join(''); };
   el.innerHTML = `<h2 style="margin:0;font-size:18px">${esc(sel)} · who voted</h2>
-    <div style="font-size:26px;font-weight:700">${pct1(t(S))}</div><div class="sub">${fmt(S.voted)} of ${fmt(S.reg)} registered voters in the ${d.countiesIn} of ${d.countiesAll} counties that have posted voter history</div>
-    ${d.countiesIn < d.countiesAll ? `<div class="warn">Partial: ${d.countiesAll - d.countiesIn} counties haven't posted who voted yet, so this mix can tilt toward the counties that have. It fills in as they post.</div>` : ''}
-    <div class="seats" style="margin-top:8px" title="how ballots were cast">${Object.entries(S.method).sort((a, b) => b[1] - a[1]).map(([m, n], i) => `<div style="flex:${n};background:${['#2f9e44', '#69c37f', '#a9dcb4', '#d7eedc'][i] ?? '#eee'};color:${i < 2 ? '#fff' : '#111'}" title="${esc(m)}: ${fmt(n)}">${n / mTot > 0.08 ? `${esc(m)} ${pct(n / mTot)}` : ''}</div>`).join('')}</div>
-    ${DIMS.map(([k, l]) => `<div style="margin-top:10px"><b>${l}</b> <span class="sub">turnout · share of all voters</span>${bars(k)}</div>`).join('')}
-    <p class="sub">Turnout here = voted ÷ registered (not ÷ eligible). Groups under 500 registered voters are left out. ${esc(d.note)}</p>`;
-  const rows = Object.entries(d.counties).map(([name, c]) => { const g = (dim, k) => c.by[dim]?.[k], r = (dim, k) => g(dim, k)?.reg ? g(dim, k).voted / g(dim, k).reg : null;
-    return { name, reg: c.reg, voted: c.complete ? c.voted : null, turnout: c.complete ? t(c) : null, young: c.complete ? r('age', '18 - 25') : null, old: c.complete ? r('age', 'Over 66') : null,
-      dem: c.complete ? r('party', 'Democratic') : null, rep: c.complete ? r('party', 'Republican') : null, una: c.complete ? r('party', 'Unaffiliated') : null, status: c.complete ? 'Posted' : 'Not posted yet' }; });
-  head([['name', 'County'], ['reg', 'Registered'], ['voted', 'Voted'], ['turnout', 'Turnout'], ['young', 'Age 18–25'], ['old', 'Age 66+'], ['dem', 'Dem'], ['rep', 'Rep'], ['una', 'Unaffiliated'], ['status', 'Voter history']],
-    'Turnout of registered voters by county and group. Counties that have not posted who voted are listed without rates.');
+    ${eTurn(sel) != null ? `<div class="sub">${pct1(eTurn(sel))} of all eligible citizens voted (${fmt(counted(sel))} votes counted). Below: turnout of registered voters, by group.</div>` : ''}
+    <div style="font-size:26px;font-weight:700">${pct1(t(S))}</div><div class="sub">${fmt(S.voted)} of ${fmt(S.reg)} registered voters${d.countiesIn < d.countiesAll ? ` in the ${d.countiesIn} of ${d.countiesAll} ${units} that have posted voter history` : `, all ${d.countiesAll} ${units}`}</div>
+    ${d.countiesIn < d.countiesAll ? `<div class="warn">Partial: ${d.countiesAll - d.countiesIn} ${units} haven't posted who voted yet, so this mix can tilt toward the counties that have. It fills in as they post.</div>` : ''}
+    ${mTot ? '' : '<!--'}<div class="seats" style="margin-top:8px" title="how ballots were cast">${Object.entries(S.method ?? {}).sort((a, b) => b[1] - a[1]).map(([m, n], i) => `<div style="flex:${n};background:${['#2f9e44', '#69c37f', '#a9dcb4', '#d7eedc'][i] ?? '#eee'};color:${i < 2 ? '#fff' : '#111'}" title="${esc(m)}: ${fmt(n)}">${n / mTot > 0.08 ? `${esc(m)} ${pct(n / mTot)}` : ''}</div>`).join('')}</div>${mTot ? '' : '-->'}
+    ${DIMS.filter(([k]) => S.by[k]).map(([k, l]) => `<div style="margin-top:10px"><b>${l}</b> <span class="sub">turnout · share of all voters</span>${bars(k)}</div>`).join('')}
+    ${DIMS.some(([k]) => !S.by[k]) ? `<div class="sub" style="margin-top:8px">${esc(sel)} doesn't publish turnout by ${DIMS.filter(([k]) => !S.by[k]).map(([, l]) => l.toLowerCase()).join(', ')}.</div>` : ''}
+    <p class="sub">Turnout here = voted ÷ registered (not ÷ eligible). Groups under 500 registered voters are left out. ${esc(d.note)}</p>
+    <details class="sub"><summary>Why the other ${Object.keys(SDS).length} states have no turnout by group</summary>${d3.groups(Object.entries(SDS), ([, why]) => why).sort((a, b) => a[1].length - b[1].length).map(([why, sts]) => `<div style="margin-top:6px"><b>${sts.map(([st]) => esc(st)).join(', ')}</b>: ${esc(why)}</div>`).join('')}<div style="margin-top:6px">From a survey of each state's election office on Nov 15, 2026; states are added as their files appear.</div></details>`;
+  const ages = Object.keys(S.by.age ?? {}).filter(Boolean).sort((a, b) => ageStart(a) - ageStart(b));
+  const COLS = [...(ages.length > 1 ? [['age', ages[0], 'Age ' + ageLabel(ages[0])], ['age', ages.at(-1), 'Age ' + ageLabel(ages.at(-1))]] : []), ['race', 'White', 'White'], ['race', 'Black', 'Black'], ['party', 'Democratic', 'Dem'], ['party', 'Republican', 'Rep'], ['party', 'Unaffiliated', 'Unaffiliated'], ['party', 'Other parties', 'Other parties']]
+    .filter(([dim, k]) => S.by[dim]?.[k] && Object.values(d.counties).some(c => c.by[dim]?.[k])); // only groups this state publishes per county
+  const rows = Object.entries(d.counties).map(([name, c]) => { const r = (dim, k) => { const g = c.by[dim]?.[k]; return c.complete && g?.reg ? g.voted / g.reg : null; };
+    return { name, reg: c.reg, voted: c.complete ? c.voted : null, turnout: c.complete ? t(c) : null, status: c.complete ? 'Posted' : 'Not posted yet', ...Object.fromEntries(COLS.map(([dim, k], i) => ['g' + i, r(dim, k)])) }; });
+  const U = unit[0].toUpperCase() + unit.slice(1);
+  head([['name', U], ['reg', 'Registered'], ['voted', 'Voted'], ['turnout', 'Turnout'], ...COLS.map(([, , l], i) => ['g' + i, l]), ...(d.countiesIn < d.countiesAll ? [['status', 'Voter history']] : [])],
+    `Turnout of registered voters by ${unit} and group.${d.countiesIn < d.countiesAll ? ` ${U === 'County' ? 'Counties' : U + 'es'} that have not posted who voted are listed without rates.` : ''}`);
   const tb = document.getElementById('rows'), p = v => v == null ? '—' : pct(v);
   tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? -(x.turnout ?? -1) : x[sortKey] ?? -1).map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${fmt(x.reg)}</td><td>${num(x.voted)}</td>
-    <td>${x.turnout == null ? '—' : `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sdColor(x.turnout)}"></span> <b>${pct(x.turnout)}</b>`}</td><td>${p(x.young)}</td><td>${p(x.old)}</td><td>${p(x.dem)}</td><td>${p(x.rep)}</td><td>${p(x.una)}</td><td class="sub">${x.status}</td></tr>`).join('');
+    <td>${x.turnout == null ? '—' : `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sdColor(x.turnout)}"></span> <b>${pct(x.turnout)}</b>`}</td>${COLS.map((_, i) => `<td>${p(x['g' + i])}</td>`).join('')}${d.countiesIn < d.countiesAll ? `<td class="sub">${x.status}</td>` : ''}</tr>`).join('');
   document.getElementById('srcs').innerHTML = Object.entries(SD).map(([st, x]) => `${esc(st)}: <a href="${esc(x.url)}">${esc(x.source)}</a>`).join(' · ') + '. More states are added as they publish voter-level files.';
+}
+
+function renderEligible(el) { // a state without turnout by group: its 2026 turnout plus who could vote (Census), and a 51-state table
+  const E = EL[sel], e = eTurn(sel), share = (o, k) => o[k] / E.total;
+  const bars = (o, order) => (order ?? Object.keys(o).sort((a, b) => o[b] - o[a])).map(k => `<div style="display:grid;grid-template-columns:150px 1fr 44px;gap:8px;align-items:center;font-size:13px;margin:2px 0"><span>${esc(k)}</span>
+      <div style="background:var(--none);border-radius:3px;height:14px"><div style="width:${share(o, k) * 100}%;height:100%;border-radius:3px;background:#69c37f"></div></div><b>${share(o, k) < 0.005 ? '<1%' : pct(share(o, k))}</b></div>`).join('');
+  el.innerHTML = !E ? '<div class="sub">No data for this state.</div>' : `<h2 style="margin:0;font-size:18px">${esc(sel)} · who could vote</h2>
+    <div style="font-size:26px;font-weight:700">${e != null ? pct1(e) : '—'}</div><div class="sub">${e != null ? `of eligible citizens voted in 2026: ${fmt(counted(sel))} votes counted, ${fmt(POP[sel][1])} citizens 18+` : 'No 2026 vote count yet'}</div>
+    <div class="sub" style="margin-top:6px">No turnout by group: ${esc(SDS[sel] ?? 'no voter-level data yet')}.</div>
+    <div style="margin-top:10px"><b>Age</b> <span class="sub">share of eligible citizens</span>${bars(E.age, Object.keys(E.age))}</div>
+    <div style="margin-top:10px"><b>Sex</b> <span class="sub">share of eligible citizens</span>${bars(E.sex)}</div>
+    <div style="margin-top:10px"><b>Race and ethnicity</b> <span class="sub">share of eligible citizens</span>${bars(E.race)}</div>
+    <p class="sub">This is who <b>could</b> vote, not who did: citizens 18 and over from the Census Bureau's American Community Survey, 2020–2024. Hispanic can be any race, so race groups overlap. States with turnout by group are outlined on the map.</p>`;
+  const rows = Object.entries(EL).map(([st, o]) => ({ st, elig: o.total, votes: counted(st) ?? null, turnout: eTurn(st), young: o.age['18–29'] / o.total, old: o.age['65+'] / o.total,
+    white: o.race['White (not Hispanic)'] / o.total, black: o.race.Black / o.total, hisp: o.race['Hispanic (any race)'] / o.total, detail: SD[st] ? 'Yes' : 'Not yet' }));
+  head([['st', 'State'], ['elig', 'Eligible citizens'], ['votes', 'Votes counted'], ['turnout', 'Turnout'], ['young', 'Age 18–29'], ['old', 'Age 65+'], ['white', 'White (not Hispanic)'], ['black', 'Black'], ['hisp', 'Hispanic'], ['detail', 'Turnout by group']],
+    'Every state: 2026 turnout of eligible citizens, and who could vote (share of citizens 18+, Census 2020–2024). Click a state.');
+  const tb = document.getElementById('rows');
+  tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? -(x.turnout ?? -1) : x[sortKey] ?? -1).map(x => `<tr data-s="${esc(x.st)}"><td><b>${esc(x.st)}</b></td><td>${fmt(x.elig)}</td><td>${num(x.votes)}</td>
+    <td>${x.turnout == null ? '—' : `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sdColor(x.turnout)}"></span> <b>${pct(x.turnout)}</b>`}</td>
+    <td>${pct(x.young)}</td><td>${pct(x.old)}</td><td>${pct(x.white)}</td><td>${pct(x.black)}</td><td>${pct(x.hisp)}</td><td class="sub">${x.detail}</td></tr>`).join('');
+  tb.querySelectorAll('tr[data-s]').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  document.getElementById('srcs').innerHTML = 'Who could vote: <a href="https://www.census.gov/programs-surveys/acs/data/summary-file.html">Census Bureau American Community Survey 2020–2024</a> (tables B29001, B05003, B05003B–I). Turnout: votes counted (highest office) from NBC News/AP results. Turnout by group: ' + Object.entries(SD).map(([st, x]) => `<a href="${esc(x.url)}">${esc(st)}</a>`).join(', ') + '.';
 }
 
 function renderMeasures() {

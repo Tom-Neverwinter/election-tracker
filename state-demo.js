@@ -5,16 +5,36 @@
 const fs = require('fs'), path = require('path'), zlib = require('zlib');
 const CACHE = path.join(__dirname, '.cache');
 
-async function zipText(url, file) { // download once a run into .cache/, then read the single text file inside the zip
+async function download(url, file) { // into .cache/, fresh each run
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const res = await fetch(url, { headers: { 'User-Agent': 'ElectionTracker/1.0 (personal project)' } });
   if (!res.ok) throw new Error(`${res.status} ${url}`);
   fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
-  const buf = fs.readFileSync(file), at = buf.readUInt32LE(18) === 0 ? null : 0; // local file header: compressed size may be 0 when a data descriptor is used
-  const nameLen = buf.readUInt16LE(26), extra = buf.readUInt16LE(28), start = 30 + nameLen + extra;
-  const cdir = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02])); // central directory has the real compressed size
-  const size = buf.readUInt32LE(cdir + 20);
-  return zlib.inflateRawSync(buf.subarray(start, start + size)).toString('latin1');
+  return file;
+}
+const zipText = async (url, file) => Object.values(unzip(fs.readFileSync(await download(url, file))))[0].toString('latin1'); // NC: one text file per zip
+function unzip(buf) { // every entry, via the central directory
+  const out = {}; let p = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 5, 6])); const n = buf.readUInt16LE(p + 10); p = buf.readUInt32LE(p + 16);
+  for (let i = 0; i < n; i++) { const method = buf.readUInt16LE(p + 10), size = buf.readUInt32LE(p + 20), nl = buf.readUInt16LE(p + 28), el = buf.readUInt16LE(p + 30), cl = buf.readUInt16LE(p + 32), off = buf.readUInt32LE(p + 42), name = buf.toString('utf8', p + 46, p + 46 + nl);
+    const start = off + 30 + buf.readUInt16LE(off + 26) + buf.readUInt16LE(off + 28), data = buf.subarray(start, start + size);
+    out[name] = method === 8 ? zlib.inflateRawSync(data) : data; p += 46 + nl + el + cl; }
+  return out;
+}
+const xmlText = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+function sheets(file) { // {sheetName: [[cell, ...], ...]}
+  const z = unzip(fs.readFileSync(file)), wb = z['xl/workbook.xml'].toString(), rels = z['xl/_rels/workbook.xml.rels'].toString();
+  const shared = z['xl/sharedStrings.xml'] ? [...z['xl/sharedStrings.xml'].toString().matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => xmlText([...m[1].matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(t => t[1]).join(''))) : [];
+  const out = {};
+  for (const [, name, rid] of wb.matchAll(/<sheet [^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)) {
+    const target = rels.match(new RegExp(`Id="${rid}"[^>]*Target="([^"]+)"`))?.[1] ?? rels.match(new RegExp(`Target="([^"]+)"[^>]*Id="${rid}"`))?.[1];
+    const xml = z['xl/' + target.replace(/^\/?xl\//, '')].toString(), rows = [];
+    for (const [, r] of xml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) { const row = [];
+      for (const [, attrs, body] of r.matchAll(/<c ([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) { const col = attrs.match(/r="([A-Z]+)\d+"/)[1].split('').reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1, t = attrs.match(/t="(\w+)"/)?.[1];
+        const v = body?.match(/<v>([^<]*)<\/v>/)?.[1], is = body?.match(/<is>([\s\S]*?)<\/is>/)?.[1];
+        row[col] = t === 'inlineStr' ? xmlText([...(is ?? '').matchAll(/<t[^>]*>([^<]*)<\/t>/g)].map(m => m[1]).join('')) : t === 's' ? shared[+v] : t === 'str' ? xmlText(v ?? '') : v == null ? null : +v; }
+      rows.push(row); }
+    out[name] = rows; }
+  return out;
 }
 
 const RACE = { W: 'White', B: 'Black', A: 'Asian', I: 'American Indian', M: 'Two or more', O: 'Other', P: 'Pacific Islander', U: 'Not stated' };
@@ -50,9 +70,136 @@ async function northCarolina() {
     countiesIn: done.length, countiesAll: Object.keys(counties).length, state, counties };
 }
 
+// Louisiana's Secretary of State posts post-election statistics: registered, voted and % voting by race (White/Black/Other) × party, per parish.
+async function louisiana() {
+  const base = 'https://electionstatistics.sos.la.gov/Data/Post_Election_Statistics/', dir = path.join(CACHE, 'la');
+  const sta = sheets(await download(base + 'statewide/2026_1103_sta.xlsx', path.join(dir, 'sta.xlsx')));
+  const par = sheets(await download(base + 'parish/2026_1103_par.xlsx', path.join(dir, 'par.xlsx')));
+  const names = {}; // "PAR 01" → "ACADIA", read from the parish file (one sheet per parish: name row, then code row)
+  for (const rows of Object.values(par)) for (let i = 0; i + 1 < rows.length; i++) { const code = String(rows[i + 1]?.[1] ?? '').trim();
+    if (/^PAR \d+$/.test(code) && rows[i]?.[1] && !/^PAR /.test(rows[i][1])) { names[code] = String(rows[i][1]).trim(); break; } }
+  const rows = sta.Sheet1, head = rows.find(r => r?.[3] === 'TOTAL');
+  if (!head || head.slice(3, 19).join() !== 'TOTAL,WHITE,BLACK,OTHER,TOTAL,WHITE,BLACK,OTHER,TOTAL,WHITE,BLACK,OTHER,TOTAL,WHITE,BLACK,OTHER') throw new Error('LA layout changed');
+  const unit = (reg, vot) => { const n = (r, i) => +r[i] || 0, g = i => ({ reg: n(reg, i), voted: n(vot, i) });
+    return { reg: n(reg, 3), voted: n(vot, 3), method: {}, complete: true,
+      by: { race: { White: g(4), Black: g(5), Other: g(6) }, party: { Democratic: g(7), Republican: g(11), 'Other parties': g(15) } } }; };
+  let state, counties = {};
+  for (let i = 0; i + 1 < rows.length; i++) { const id = String(rows[i]?.[1] ?? '').trim();
+    if (!/^(STATE|PAR \d+)$/.test(id) || String(rows[i + 1]?.[1]).trim() !== '# VOTING') continue;
+    const u = unit(rows[i], rows[i + 1]);
+    if (id === 'STATE') state = u; else { if (!names[id]) throw new Error('LA: no parish name for ' + id); counties[names[id]] = u; } }
+  const n = Object.keys(counties).length;
+  if (!state || n !== 64) throw new Error(`LA: parsed ${n} parishes`);
+  const sum = Object.values(counties).reduce((a, c) => a + c.voted, 0);
+  if (sum !== state.voted) throw new Error(`LA: parishes add to ${sum}, state says ${state.voted}`);
+  return { source: 'Louisiana Secretary of State post-election statistics', url: 'https://electionstatistics.sos.la.gov/default.aspx?Stats=Post_Election_Statistics&Type=Parish',
+    note: 'Louisiana reports race as White, Black or Other and party as Democratic, Republican or other; it does not break turnout down by age or sex. Registered = active and inactive voters.',
+    countiesIn: n, countiesAll: n, unitName: 'parish', state, counties };
+}
+
+// Washington's Secretary of State keeps one spreadsheet of registered voters and ballots by county × age × sex for every election.
+// The 2026 general rows exist but stay zero until the state certifies (about Dec 4); until then this throws and the state shows as pending.
+async function washington() {
+  const R = sheets(await download('https://www.sos.wa.gov/sites/default/files/2022-05/VoterParticipation.xlsx', path.join(CACHE, 'wa', 'vp.xlsx'))).Table;
+  const h = R[0].map(x => String(x).trim()), at = k => { const i = h.indexOf(k); if (i < 0) throw new Error('WA layout changed: no ' + k); return i; };
+  const [cI, yI, tI, aI] = ['County', 'Year', 'Election Type', 'Age'].map(at), SEX = { Female: 'Female', Male: 'Male', Unknown: 'Not stated' };
+  const rows = R.slice(1).filter(r => r[yI] == 2026 && r[tI] === 'General'), STATE = 'zWashington State';
+  const total = rows.find(r => r[cI] === STATE && r[aI] === '0TOTAL');
+  if (!total || !(+total[at('Total Ballots')] > 0)) throw new Error('2026 general not posted yet');
+  const counties = {};
+  for (const r of rows) { if (r[aI] === '0TOTAL' || r[cI] === STATE) continue; // subtotal rows
+    const c = (counties[r[cI]] ??= { reg: 0, voted: 0, method: {}, complete: true, by: {} });
+    for (const [col, sex] of Object.entries(SEX)) { const reg = +r[at(col + ' Voters')] || 0, voted = +r[at(col + ' Ballots')] || 0;
+      c.reg += reg; c.voted += voted;
+      for (const [dim, val] of [['age', r[aI] === '65-' ? '65+' : r[aI]], ['sex', sex]]) { const g = ((c.by[dim] ??= {})[val] ??= { reg: 0, voted: 0 }); g.reg += reg; g.voted += voted; } } }
+  const state = rollup(counties);
+  if (state.voted !== +total[at('Total Ballots')]) throw new Error(`WA: counties add to ${state.voted}, state says ${total[at('Total Ballots')]}`);
+  return { source: 'Washington Secretary of State voter participation data', url: 'https://www.sos.wa.gov/elections/data-research/election-data-and-maps/reports-data-and-statistics',
+    note: "Washington records age and sex but not race, and has no party registration. Registered voters are the state's estimate for the election period.",
+    countiesIn: Object.keys(counties).length, countiesAll: Object.keys(counties).length, state, counties };
+}
+
+// Colorado's Secretary of State posts ballots returned by sex × age × party (statewide) and by party (per county), plus registration by the same groups.
+// These are unofficial returns, updated daily through Nov 13; registration is the Nov 1 count.
+async function colorado() {
+  const dir = path.join(CACHE, 'co');
+  const act = sheets(await download('https://www.coloradosos.gov/pubs/newsRoom/pressReleases/2026/20261111GenElectionActivity.xlsx', path.join(dir, 'act.xlsx')));
+  const reg = sheets(await download('https://www.coloradosos.gov/pubs/elections/VoterRegNumbers/2026/OctoberStatistics2026.xlsx', path.join(dir, 'reg.xlsx')));
+  const PARTY = { DEM: 'Democratic', REP: 'Republican', UAF: 'Unaffiliated' }, party = code => PARTY[code] ?? 'Other parties';
+  const SEX = { Female: 'Female', FEMALE: 'Female', Male: 'Male', MALE: 'Male', 'Not Disclosed': 'Not stated', 'NOT DISCLOSED': 'Not stated', X: 'X' };
+  const AGES = ['18-24', '25-34', '35-44', '45-54', '55-64', '65-74', '75+'];
+  const g = (t, dim, val) => ((t.by[dim] ??= {})[val] ??= { reg: 0, voted: 0 });
+  // Registered, per county: active + inactive by party (pre-registrants under 18 are left out)
+  const ps = reg['Party &amp; Status'], ph = ps[2], counties = {};
+  for (const r of ps.slice(3)) { const name = r[0]; if (!name || /total|end of/i.test(name)) continue;
+    const c = (counties[name] ??= { reg: 0, voted: 0, method: {}, complete: true, by: {} });
+    for (let i = 1; i < 12; i++) { const n = (+r[i] || 0) + (+r[i + 13] || 0); c.reg += n; g(c, 'party', party(ph[i])).reg += n; } }
+  // Ballots returned, per county × party
+  const bc = act.All_Returned_Ballots_By_County, bh = bc[1];
+  for (const r of bc.slice(2)) { const c = counties[r[0]]; if (!c) continue;
+    for (let i = 1; i < 12; i++) { const n = +r[i] || 0; c.voted += n; g(c, 'party', party(bh[i])).voted += n; } }
+  const state = { reg: 0, voted: 0, method: {}, by: {} };
+  for (const c of Object.values(counties)) { state.reg += c.reg; state.voted += c.voted; for (const [k, v] of Object.entries(c.by.party)) { g(state, 'party', k).reg += v.reg; g(state, 'party', k).voted += v.voted; } }
+  // Statewide sex × age: registration from the all-parties block, ballots from the sex/age sheet
+  const ga = reg['Gender Party, Age &amp; Status'], hdr = ga[5], blocks = hdr.map((x, i) => x === 'COUNTY' ? i : -1).filter(i => i >= 0);
+  const parties = blocks.filter(b => ga[1][b] !== 'Total'), tot = blocks.find(b => ga[1][b] === 'Total'); // one block per party, then an all-parties grand total
+  for (const b of parties) if (hdr[b + 3] !== '18-24 Active' || hdr[b + 9] !== '75+ Active' || hdr[b + 11] !== '18-24 Inactive' || hdr[b + 17] !== '75+ Inactive') throw new Error('CO registration layout changed');
+  let check = 0;
+  for (const r of ga.slice(6)) for (const b of parties) { const sex = SEX[r[b + 1]]; if (!r[b] || /total/i.test(r[b]) || !sex) continue;
+    AGES.forEach((a, k) => { const n = (+r[b + 3 + k] || 0) + (+r[b + 11 + k] || 0); g(state, 'age', a).reg += n; g(state, 'sex', sex).reg += n; }); }
+  for (const r of ga.slice(6)) if (r[tot] && !/total/i.test(r[tot]) && SEX[r[tot + 1]]) check += +r[tot + 2] || 0;
+  const ageReg = AGES.reduce((a, k) => a + g(state, 'age', k).reg, 0), prereg = ga.slice(6).reduce((a, r) => a + parties.reduce((s, b) => s + (r[b] && !/total/i.test(r[b]) && SEX[r[b + 1]] ? +r[b + 2] || 0 : 0), 0), 0);
+  if (ageReg + prereg !== check) throw new Error(`CO: age bands + pre-registrants = ${ageReg + prereg}, grand total says ${check}`);
+  let sex = null;
+  for (const r of act.All_Returned_Ballots_GenderAge.slice(2)) { const k = String(r[0] ?? '').trim(), n = +r.at(-1) || 0;
+    if (SEX[k]) { sex = SEX[k]; continue; }
+    if (k === 'Grand Total') { if (n !== state.voted) throw new Error(`CO: counties add to ${state.voted}, sex/age sheet says ${n}`); break; }
+    const age = k === '75 AND OVER' ? '75+' : k; if (!sex || !AGES.includes(age)) continue; // '<18' = pre-registrants, left out
+    g(state, 'age', age).voted += n; g(state, 'sex', sex).voted += n; }
+  if (Object.keys(counties).length !== 64) throw new Error(`CO: parsed ${Object.keys(counties).length} counties`);
+  return { source: 'Colorado Secretary of State ballot returns (Nov 11) and voter registration (Nov 1)', url: 'https://www.coloradosos.gov/pubs/newsRoom/pressReleases/2026/PR20261112BallotReturns.html',
+    note: 'Colorado figures are unofficial ballots returned as of Nov 11, before certification. Age and sex are statewide only; counties are by party. Colorado does not record race. Registered = active and inactive voters on Nov 1.',
+    countiesIn: 64, countiesAll: 64, state, counties };
+}
+
+function rollup(counties) { // statewide totals = sum of counties
+  const state = { reg: 0, voted: 0, method: {}, by: {} };
+  for (const c of Object.values(counties)) { state.reg += c.reg; state.voted += c.voted;
+    for (const [dim, d] of Object.entries(c.by)) for (const [val, g] of Object.entries(d)) { const t = ((state.by[dim] ??= {})[val] ??= { reg: 0, voted: 0 }); t.reg += g.reg; t.voted += g.voted; } }
+  return state;
+}
+
+// Why each other state has no breakdown here yet (survey of state election offices, 2026-11-15). Shown on the map for states without data.
+const STATUS = {
+  Pennsylvania: 'Publishes turnout by age and party for each county, after certification (likely late Dec–Jan)',
+  Washington: 'Publishes turnout by age and sex for each county, after certification (about Dec 4)',
+  Delaware: 'Publishes turnout by age and party for every district, months after the election',
+  Maryland: 'Publishes turnout by party, after certification',
+  California: 'UC Berkeley Statewide Database publishes voters by party, sex and age about a year after the election',
+  Kentucky: 'Publishes turnout by age, sex and party as PDF only, months after the election',
+  Iowa: 'Publishes turnout by age, sex and party as PDF only (expected around January)',
+  Oregon: 'Publishes turnout by age and party as PDF only (expected around January)',
+  Alabama: 'Publishes turnout by race, sex and age as PDF only, about a year after the election',
+  Alaska: 'Publishes turnout by age, sex and party as a web report only',
+  Nevada: 'Publishes turnout by party for each county; its site blocks automated downloads',
+  'South Carolina': 'Publishes registered voters by race, age and sex, but turnout by group only for absentee voters',
+  Ohio: 'No summary; its free voter file (age, party) gets vote history after the canvass',
+  Maine: 'Publishes party breakdowns for absentee ballots only',
+  Florida: 'Voter file with race, sex and party is free by request only; no public summary found (site blocks automated access)',
+  Georgia: 'Not confirmed: its election data site blocks automated access',
+  Colorado: 'Publishes unofficial ballot returns by party, sex and age',
+  ...Object.fromEntries(['Arizona', 'Arkansas', 'Connecticut', 'District of Columbia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Kansas', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana',
+    'Nebraska', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Dakota', 'Oklahoma', 'Rhode Island', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'West Virginia',
+    'Wisconsin', 'Wyoming'].map(st => [st, 'Does not publish turnout by age, race, sex or party'])),
+};
+
 async function main() {
-  const out = { 'North Carolina': await northCarolina() };
-  fs.writeFileSync(path.join(__dirname, 'state-demo-data.js'), `// Built by state-demo.js on ${new Date().toISOString()}\nwindow.STATE_DEMO = ${JSON.stringify(out)};\n`);
+  const out = {}, errs = [];
+  for (const [st, load] of [['North Carolina', northCarolina], ['Louisiana', louisiana], ['Washington', washington], ['Colorado', colorado]]) try { out[st] = await load(); } catch (e) { errs.push(`${st}: ${e.message}`); } // one state failing keeps the others
+  if (!Object.keys(out).length) throw new Error(errs.join('; '));
+  for (const e of errs) console.warn('skipped ' + e);
+  const status = Object.fromEntries(Object.entries(STATUS).filter(([st]) => !out[st]));
+  fs.writeFileSync(path.join(__dirname, 'state-demo-data.js'), `// Built by state-demo.js on ${new Date().toISOString()}\nwindow.STATE_DEMO = ${JSON.stringify(out)};\nwindow.STATE_DEMO_STATUS = ${JSON.stringify(status)};\n`);
   for (const [st, d] of Object.entries(out)) console.log(`${st}: ${d.countiesIn} of ${d.countiesAll} counties complete; there ${d.state.voted.toLocaleString()} voted of ${d.state.reg.toLocaleString()} registered (${(d.state.voted / d.state.reg * 100).toFixed(1)}%)`);
 }
 if (require.main === module) main().catch(e => { console.error(e.message); process.exitCode = 1; });

@@ -31,7 +31,7 @@ Every badge above is live. The first row is site reachability, the GitHub Pages 
 | Timeline | Hour-by-hour captures of odds, projected seats, early votes and race calls |
 | Early vote | Ballots cast before Election Day by state, per eligible voter and against 2022 |
 | Measures | Statewide ballot measures: 2026 with results, and past years |
-| Who voted | Turnout by age, race, ethnicity, party and sex, statewide and by county, from states that publish voter-level counts (North Carolina so far) |
+| Who voted | Every state's 2026 turnout of eligible citizens and who could vote (Census: citizens 18+ by age, sex and race); full turnout by age, race, party and sex, statewide and by county, where the state publishes it (North Carolina, Louisiana, Colorado; Washington after certification) |
 | States | Party control of each state government and trifectas, 1776 to today |
 | History | Turnout by state for any two elections from 1980 to 2024, and national turnout since 1789 |
 
@@ -50,7 +50,8 @@ There is no build step and no server. `index.html` is the whole app; it loads D3
 | `results.js` | `results-data.js` | NBC News results (Associated Press vote data) |
 | `measures-results.js` | `measures-results-data.js` | Wikipedia's 2026 ballot measures table, NBC News, and each measure's Wikipedia page |
 | `legislature-results.js` | `legislature-results-data.js` | Wikipedia, 2026 state legislative elections |
-| `state-demo.js` | `state-demo-data.js` | North Carolina State Board of Elections voter and history stats |
+| `state-demo.js` | `state-demo-data.js` | State election offices: North Carolina, Louisiana, Colorado, Washington |
+| `eligible.js` (yearly, not hourly) | `eligible-data.js` | Census Bureau American Community Survey 2020–2024 |
 | `badges.js` | `badges/*.json` (README badges) | the data files above |
 | `hourly-index.js` | `hourly/index.js` (compact summary of every capture) | `hourly/*.json` |
 | `hourly.js` | runs all of the above, then commits and pushes | |

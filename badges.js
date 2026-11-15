@@ -23,7 +23,6 @@ function votesCounted() { // highest office per state: its biggest statewide rac
 
 const M = window.MEASURES ?? [], MR = window.MEASURES_RESULTS ?? {}, C = Object.values(window.CERT ?? {});
 const decided = M.filter(m => MR[`${m.state}|${m.name}`]).length, certified = C.filter(c => c.certified).length, official = C.filter(c => !c.certified && c.official).length;
-const nc = window.STATE_DEMO?.['North Carolina'];
 const badges = {
   senate: chamber('S', 'Senate', 51),
   house: chamber('H', 'House', 218),
@@ -31,7 +30,7 @@ const badges = {
   votes: { label: 'votes counted', message: `${(votesCounted() / 1e6).toFixed(1)}M`, color: '2f9e44' },
   measures: { label: 'ballot measures', message: `${decided} of ${M.length} decided`, color: decided === M.length ? '2f9e44' : 'e6bb5c' },
   certified: { label: 'states certified', message: `${certified} of ${C.length}${official ? ` · ${official} official` : ''}`, color: certified === C.length ? '2f9e44' : 'e6bb5c' },
-  ...(nc ? { whovoted: { label: 'who voted (NC)', message: `${nc.countiesIn} of ${nc.countiesAll} counties`, color: nc.countiesIn === nc.countiesAll ? '2f9e44' : 'e6bb5c' } } : {}),
+  whovoted: { label: 'who voted', message: `${Object.keys(window.STATE_DEMO ?? {}).length} states with demographics`, color: '2f9e44' },
 };
 fs.mkdirSync(dir, { recursive: true });
 for (const [name, b] of Object.entries(badges)) fs.writeFileSync(path.join(dir, name + '.json'), JSON.stringify({ schemaVersion: 1, ...b }) + '\n');

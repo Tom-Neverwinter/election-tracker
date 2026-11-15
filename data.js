@@ -92,7 +92,7 @@ async function houseForecast() {
 
 // 2028: no forecaster ratings exist yet, so each state is its Polymarket market alone. EVs per the 2020 census (used 2024-2028).
 const ELECTORS = {"Alabama":9,"Alaska":3,"Arizona":11,"Arkansas":6,"California":54,"Colorado":10,"Connecticut":7,"Delaware":3,"District of Columbia":3,"Florida":30,"Georgia":16,"Hawaii":4,"Idaho":4,"Illinois":19,"Indiana":11,"Iowa":6,"Kansas":6,"Kentucky":8,"Louisiana":8,"Maine":4,"Maryland":10,"Massachusetts":11,"Michigan":15,"Minnesota":10,"Mississippi":6,"Missouri":10,"Montana":4,"Nebraska":5,"Nevada":6,"New Hampshire":4,"New Jersey":14,"New Mexico":5,"New York":28,"North Carolina":16,"North Dakota":3,"Ohio":17,"Oklahoma":7,"Oregon":8,"Pennsylvania":19,"Rhode Island":4,"South Carolina":9,"South Dakota":3,"Tennessee":11,"Texas":40,"Utah":6,"Vermont":3,"Virginia":13,"Washington":12,"West Virginia":4,"Wisconsin":10,"Wyoming":3};
-async function president() { // ponytail: Maine/Nebraska district electors folded into the statewide winner
+async function president() { // Maine/Nebraska district electors come from Kalshi's district markets (kalshi.districts); index.html splits them out
   const ev = slug => get('https://gamma-api.polymarket.com/events?slug=' + slug).then(r => eventOdds(r[0])).catch(() => null);
   const states = Object.keys(ELECTORS);
   const markets = await Promise.all(states.map(s => ev(`2028-presidential-election-${s.toLowerCase().replace(/ /g, '-')}-winner`)));
@@ -100,7 +100,23 @@ async function president() { // ponytail: Maine/Nebraska district electors folde
     market: markets[i], score: markets[i]?.pD != null ? round(marketScore(markets[i].pD)) : null }));
   const [party, dem, rep, winner] = await Promise.all(['which-party-wins-2028-us-presidential-election', 'democratic-presidential-nominee-2028', 'republican-presidential-nominee-2028', 'presidential-election-winner-2028'].map(control));
   const top = o => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  return { raters: [], races, party, dem: top(dem), rep: top(rep), winner: top(winner), wiki: 'https://en.wikipedia.org/wiki/2028_United_States_presidential_election' };
+  return { raters: [], races, party, dem: top(dem), rep: top(rep), winner: top(winner), kalshi: typeof window === 'undefined' ? await kalshiPres().catch(e => (console.warn('kalshi unavailable', e), null)) : null, wiki: 'https://en.wikipedia.org/wiki/2028_United_States_presidential_election' };
+}
+
+// Kalshi's public API answers browsers with 403 (no CORS), so only snapshot.js/hourly.js get it; index.html borrows the latest snapshot's.
+async function kalshiPres() {
+  const k = s => get(`https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=${s}&status=open&limit=1000`)
+    .then(r => r.markets.filter(m => /-(2028|28)$/.test(m.event_ticker)).map(m => ({ ev: m.event_ticker, name: m.yes_sub_title, p: round((+m.yes_bid_dollars + +m.yes_ask_dollars) / 2, 3) }))); // bid/ask midpoint
+  const [party, states, dem, rep, winner, dist] = await Promise.all(['KXPRESPARTY', 'KXPRESSTATE', 'KXPRESNOMD', 'KXPRESNOMR', 'KXPRESPERSON', 'KXPRESDISTRICT'].map(k));
+  const two = ms => ({ Democratic: ms.find(m => /^Democ/.test(m.name))?.p, Republican: ms.find(m => /^Repub/.test(m.name))?.p });
+  const pD = o => o.Democratic + o.Republican > 0 ? round(o.Democratic / (o.Democratic + o.Republican), 3) : null;
+  const top = ms => ms.sort((a, b) => b.p - a.p).slice(0, 5).map(m => [m.name, m.p]);
+  const byState = Object.fromEntries(Object.entries({ ...ABBR, DC: 'District of Columbia' }).map(([ab, st]) => [st, pD(two(states.filter(m => m.ev === `KXPRESSTATE-${ab}-28`)))]).filter(([, p]) => p != null));
+  const districts = {}; // KXPRESDISTRICT-NE02-28 → 'Nebraska 2'; KXPRESDISTRICT-DC-28 is DC's whole vote
+  for (const ev of new Set(dist.map(m => m.ev))) { const [, ab, n] = ev.match(/-([A-Z]{2})(\d\d)?-28$/) ?? [], p = pD(two(dist.filter(m => m.ev === ev)));
+    if (p == null) continue; if (ab === 'DC') byState['District of Columbia'] = p; else if (ABBR[ab] && n) districts[`${ABBR[ab]} ${+n}`] = p; }
+  if (!party.length) throw new Error('no Kalshi 2028 party market');
+  return { party: two(party), states: byState, districts, dem: top(dem), rep: top(rep), winner: top(winner), url: 'https://kalshi.com/markets/kxpresparty' };
 }
 
 const marketScore = p => Math.max(-3, Math.min(3, (p - 0.5) * 6.6)); // ponytail: linear, 50%→tossup, ~95%→safe

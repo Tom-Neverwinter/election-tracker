@@ -142,7 +142,11 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
 if (!D.early) document.querySelector('[data-o=early]').remove();
 if (!D.president) document.querySelector('[data-o=president]').remove();
 if (![...document.querySelectorAll('.tabs button')].some(b => b.dataset.o === office)) office = 'governor'; // removed tab or a bad #hash
+if (D.president && !D.president.kalshi) D.president.kalshi = Object.entries(HISTORY).sort().findLast(([d, h]) => d <= (saved ? day : "9") && h.president?.kalshi)?.[1].president.kalshi; // browsers can't reach Kalshi (no CORS)
 for (const r of D.president?.races ?? []) { // 2024 result is the "held by" baseline, and the fallback where no market exists yet
+  const k = D.president.kalshi?.states?.[r.state], ss = [r.market?.pD, k].filter(p => p != null).map(marketScore);
+  if (k != null) { r.kalshi = k; r.score = Math.round(d3.mean(ss) * 100) / 100; r.spread = Math.round(d3.deviation(ss) * 100) / 100 || 0; }
+  r.districts = Object.entries(D.president.kalshi?.districts ?? {}).filter(([n]) => n.startsWith(r.state + ' ')).map(([n, p]) => ({ district: +n.split(' ').pop(), pD: p, score: Math.round(marketScore(p) * 100) / 100 })); // Maine/Nebraska
   const p = PRESIDENT.states[r.state]?.[2024];
   if (!p) continue;
   r.incParty = p[2]; r.incumbent = `2024: D ${p[0]} · R ${p[1]}`;
@@ -219,8 +223,12 @@ function render() {
       if (rs && office === 'house') { const n = k => rs.filter(r => k(r.score)).length; return `${f.properties.name}: ${n(v => v > 0.5)} D · ${n(v => v < -0.5)} R favored · ${n(v => Math.abs(v) <= 0.5)} tossup`; }
       return rs ? rs.map(r => `${r.label}: ${cat(r.score)[1]}${r.market?.pD != null ? ` · market D ${pct(r.market.pD)}` : ''}`).join('\n') : `${f.properties.name}: no race`;
     });
+  if (office === 'president') { // one dot per electoral vote; Maine/Nebraska district dots take their district's odds
+    const us = evUnits(), unit = d => us.find(u => u.state === d.state && u.district === d.district) ?? us.find(u => u.state === d.state && u.district == null);
+    districtDots('ev', d => color(unit(d)?.score), d => { const u = unit(d); return u ? `${u.label} (${u.ev} electoral vote${u.ev > 1 ? 's' : ''}): ${cat(u.score)[1]}` : d.state; });
+    document.getElementById('legend').insertAdjacentHTML('beforeend', '<span>one dot per electoral vote</span>'); }
   renderSeats(); renderDetail(); renderTable();
-  document.getElementById('srcs').innerHTML = office === 'president' ? `Sources: <a href="https://polymarket.com">Polymarket</a> state and national 2028 markets (thin: a few thousand dollars traded per state); where a state has no market, its 2024 margin from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>. <a href="${D.president.wiki}">Wikipedia: 2028 election</a>.` : `Sources: <a href="${D[office].wiki}">Wikipedia's ${office} ratings table</a> (${D[office].raters.map(esc).join(', ')}) and <a href="https://polymarket.com">Polymarket</a>.`;
+  document.getElementById('srcs').innerHTML = office === 'president' ? `Sources: <a href="https://polymarket.com">Polymarket</a> and <a href="https://kalshi.com/markets/kxpresstate">Kalshi</a> state and national 2028 markets, averaged (thin: a few thousand dollars traded per state; Kalshi as of the last hourly snapshot); where a state has no market, its 2024 margin from <a href="https://electionlab.mit.edu/data">MIT Election Lab</a>. <a href="${D.president.wiki}">Wikipedia: 2028 election</a>.` : `Sources: <a href="${D[office].wiki}">Wikipedia's ${office} ratings table</a> (${D[office].raters.map(esc).join(', ')}) and <a href="https://polymarket.com">Polymarket</a>.`;
 }
 
 // ---- Results tab: election night, from results-data.js (written by `node results.js`) ----
@@ -238,19 +246,24 @@ const split = d3.interpolateRgb(R_COLORS.calledR, R_COLORS.calledD); // D share 
 const rColor = r => { const s = rSide(r); return s ? R_COLORS[(r.called ? 'called' : 'lead') + s] : 'var(--none)'; };
 const rLabel = r => r.office === 'O' ? `${r.state} ${r.name}` : r.district != null ? `${r.state} ${r.district || 'at-large'}` : r.state;
 const forecastFor = r => (D[RKIND[r.office][0]]?.races ?? []).find(f => f.state === r.state && (r.office !== 'H' || f.label.endsWith('-' + (r.district || 'AL')))); // ponytail: Senate specials share a state; the first forecast row wins
-const CD_R = 8.5; let cdNodes; // House districts as equal dots, nudged apart from their real centers (Dorling cartogram)
-function districtDots(rows) { // rows = this year's House results, or null to hide the dots
-  const svg = d3.select('#map').classed('cd', !!rows), g = svg.selectAll('g.cd').data([0]).join('g').attr('class', 'cd');
-  if (!rows) return g.attr('display', 'none'); g.attr('display', null);
-  if (!cdNodes) { const p = d3.geoAlbersUsa().scale(1300).translate([487.5, 305]); // same projection as us-atlas states-albers-10m
-    cdNodes = CD.map(([state, district, lon, lat]) => { const [x, y] = p([lon, lat]); return { state, district, x, y, tx: x, ty: y }; });
-    const sim = d3.forceSimulation(cdNodes).force('x', d3.forceX(d => d.tx)).force('y', d3.forceY(d => d.ty)).force('c', d3.forceCollide(CD_R + 0.4)).stop();
-    for (let i = 0; i < 250; i++) sim.tick(); } // ponytail: runs once per page load (~435 nodes, a few ms); precompute if it ever gets slow
-  const by = new Map(rows.map(r => [`${r.state}|${r.district ?? 0}`, r])), at = d => by.get(`${d.state}|${d.district}`);
-  g.selectAll('circle').data(cdNodes).join(e => e.append('circle').call(c => c.append('title')))
-    .attr('cx', d => d.x).attr('cy', d => d.y).attr('r', CD_R).attr('fill', d => at(d) ? rColor(at(d)) : 'var(--none)')
+const DOT_R = { cd: 8.5, ev: 7.5 }, dotNodes = {}; // equal dots nudged apart from their real centers (Dorling cartogram)
+function dotPoints(kind) { // cd: one per House district; ev: one per electoral vote = districts + 2 per state (+ DC's 3)
+  if (kind === 'cd') return CD;
+  const extra = Object.entries(ELECTORS).flatMap(([st, n]) => { const pts = CD.filter(c => c[0] === st), at = pts.length ? [d3.mean(pts, c => c[2]), d3.mean(pts, c => c[3])] : [-77.03, 38.9]; // no districts = DC
+    return d3.range(n - pts.length).map(() => [st, 'S', ...at]); });
+  return [...CD, ...extra];
+}
+function districtDots(kind, fill, title) { // kind null hides the dots
+  const svg = d3.select('#map').classed('cd', !!kind), g = svg.selectAll('g.cd').data([0]).join('g').attr('class', 'cd');
+  if (!kind) return g.attr('display', 'none'); g.attr('display', null);
+  if (!dotNodes[kind]) { const p = d3.geoAlbersUsa().scale(1300).translate([487.5, 305]); // same projection as us-atlas states-albers-10m
+    const nodes = dotNodes[kind] = dotPoints(kind).map(([state, district, lon, lat]) => { const [x, y] = p([lon, lat]); return { state, district, x, y, tx: x, ty: y }; });
+    const sim = d3.forceSimulation(nodes).force('x', d3.forceX(d => d.tx)).force('y', d3.forceY(d => d.ty)).force('c', d3.forceCollide(DOT_R[kind] + 0.4)).stop();
+    for (let i = 0; i < 250; i++) sim.tick(); } // ponytail: runs once per kind per page load (≤538 nodes, a few ms); precompute if it ever gets slow
+  g.selectAll('circle').data(dotNodes[kind]).join(e => e.append('circle').call(c => c.append('title')))
+    .attr('cx', d => d.x).attr('cy', d => d.y).attr('r', DOT_R[kind]).attr('fill', fill)
     .classed('sel', d => d.state === sel).on('click', (e, d) => { sel = d.state; render(); })
-    .select('title').text(d => { const r = at(d); return r ? `${rLabel(r)}: ${rLead(r) ? `${rLead(r).name} (${rParty(rLead(r).party)}) ${rLead(r).pct}%${r.called ? ' · called' : ''}` : 'no votes yet'} · ${Math.round(r.pctIn ?? 0)}% in` : `${d.state} ${d.district || 'at-large'}: no result`; });
+    .select('title').text(title);
 }
 function renderResults() {
   document.querySelectorAll('#rmodes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.r === rkind));
@@ -264,7 +277,8 @@ function renderResults() {
       const n = s => rs.filter(r => rSide(r) === s).length; return n('D') + n('R') ? split(n('D') / (n('D') + n('R'))) : 'var(--none)'; }) // House: D share of seats called + led; not the forecast scale, whose middle is the yellow 'Tossup'
     .classed('sel', f => f.properties.name === sel)
     .select('title').text(f => (g.get(f.properties.name) ?? []).map(r => `${rLabel(r)}: ${rLead(r) ? `${rLead(r).name} (${rParty(rLead(r).party)}) ${rLead(r).pct}%${r.called ? ' · called' : ''}` : 'no votes yet'} · ${Math.round(r.pctIn ?? 0)}% in`).join('\n') || `${f.properties.name}: no race`);
-  if (rkind === 'H') districtDots(rows);
+  if (rkind === 'H') { const by = new Map(rows.map(r => [`${r.state}|${r.district ?? 0}`, r])), at = d => by.get(`${d.state}|${d.district}`);
+    districtDots('cd', d => at(d) ? rColor(at(d)) : 'var(--none)', d => { const r = at(d); return r ? `${rLabel(r)}: ${rLead(r) ? `${rLead(r).name} (${rParty(rLead(r).party)}) ${rLead(r).pct}%${r.called ? ' · called' : ''}` : 'no votes yet'} · ${Math.round(r.pctIn ?? 0)}% in` : `${d.state} ${d.district || 'at-large'}: no result`; }); }
   const k = s => rows.filter(r => r.called && rParty(r.winnerParty) === s).length, l = s => rows.filter(r => !r.called && rSide(r) === s).length;
   document.getElementById('seats').innerHTML = [[k('D'), R_COLORS.calledD, 'Called D'], [l('D'), R_COLORS.leadD, 'Leading D'], [rows.filter(r => !rSide(r)).length, 'var(--none)', 'No votes'], [l('R'), R_COLORS.leadR, 'Leading R'], [k('R'), R_COLORS.calledR, 'Called R']]
     .filter(([n]) => n).map(([n, c, t]) => `<div style="flex:${n};background:${c};color:${fg(c)}" title="${t}: ${n}">${n}</div>`).join('');
@@ -626,7 +640,7 @@ const likely = r => !r.score ? r.incParty : r.score > 0 ? 'D' : 'R'; // ponytail
 const PARTY = { D: 'Democrats', R: 'Republicans' };
 const tag = p => `<b style="color:var(--${p.toLowerCase()})">${p}</b>`;
 
-const odds = o => Object.entries(o ?? {}).map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ');
+const odds = o => Object.entries(o ?? {}).sort().map(([k, p]) => `<b style="color:var(--${k[0] === 'D' ? 'd' : 'r'})">${k[0]} ${pct(p)}</b>`).join(' / ');
 function chamberLine(o, full) {
   const NAME = { governor: 'Governors', senate: 'Senate', house: 'House' }, market = { senate: D.control.Senate, house: D.control.House }[o];
   const mk = market && Object.keys(market).length ? ` · Polymarket control: ${odds(market)}` : '';
@@ -643,12 +657,25 @@ function chamberLine(o, full) {
   return `<div>${head}${flips.length > 10 ? `<details><summary>${flips.length} likely flips</summary><div class="sub">${list}</div></details>` : `<div class="sub">${body}</div>`}</div>`;
 }
 
+// Electoral votes as units: one per state, except Maine/Nebraska split into 2 statewide + 1 per district when Kalshi has district markets.
+const nth = n => n + (['th', 'st', 'nd', 'rd'][n] ?? 'th');
+const evUnits = () => D.president.races.flatMap(r => r.districts?.length
+  ? [{ r, state: r.state, label: r.state + ' statewide', ev: r.ev - r.districts.length, score: r.score }, ...r.districts.map(d => ({ r, state: r.state, district: d.district, label: `${r.state} ${nth(d.district)}`, ev: 1, score: d.score }))]
+  : [{ r, state: r.state, label: r.state, ev: r.ev, score: r.score }]);
+const uSide = u => !u.score ? u.r.incParty : u.score > 0 ? 'D' : 'R';
+function tipping() { // walk from the winner's safest units toward the closest; the one that crosses 270 decides it
+  const us = evUnits().sort((a, b) => b.score - a.score), dWins = d3.sum(us, u => uSide(u) === 'D' ? u.ev : 0) >= 270;
+  let n = 0; for (const u of dWins ? us : us.reverse()) if ((n += u.ev) >= 270) return u;
+}
+
 function presLine(full) {
   const P = D.president; if (!P) return '';
-  const ev = { D: 0, R: 0 }; for (const r of P.races) ev[likely(r)] = (ev[likely(r)] ?? 0) + r.ev;
+  const ev = { D: 0, R: 0 }; for (const u of evUnits()) ev[uSide(u)] = (ev[uSide(u)] ?? 0) + u.ev;
+  const tp = tipping(), K = P.kalshi;
   const names = l => l.map(([n, p]) => `${esc(n)} ${pct(p)}`).join(', ');
-  const head = `<b>President 2028</b> &nbsp;Polymarket: ${odds(P.party)} · electoral votes by state favorite: ${tag('D')} ${ev.D} – ${tag('R')} ${ev.R}`;
-  return full ? `<div>${head}<div class="sub">Winner: ${names(P.winner)}</div><div class="sub">D nominee: ${names(P.dem)}</div><div class="sub">R nominee: ${names(P.rep)}</div></div>`
+  const head = `<b>President 2028</b> &nbsp;Polymarket: ${odds(P.party)}${K ? ` · Kalshi: ${odds(K.party)}` : ''} · electoral votes by state favorite: ${tag('D')} ${ev.D} – ${tag('R')} ${ev.R}${tp ? ` · tipping point: <b>${esc(tp.label)}</b> (${cat(tp.score)[1]})` : ''}`;
+  const both = (t, k) => `<div class="sub">${t}: ${names(P[k])}${K ? `<br>&nbsp;&nbsp;Kalshi: ${names(K[k])}` : ''}</div>`;
+  return full ? `<div>${head}${both('Winner', 'winner')}${both('D nominee', 'dem')}${both('R nominee', 'rep')}</div>`
     : `<div style="margin-bottom:4px">${head}</div>`;
 }
 
@@ -793,7 +820,7 @@ function renderHistory() {
 }
 
 function renderSeats() {
-  const counts = CATS.map(c => [c, d3.sum(races().filter(r => r.score != null && cat(r.score) === c), r => r.ev ?? 1)]); // president: weighted by electoral votes
+  const counts = CATS.map(c => [c, d3.sum((office === 'president' ? evUnits() : races()).filter(r => r.score != null && cat(r.score) === c), r => r.ev ?? 1)]); // president: weighted by electoral votes
   document.getElementById('seats').innerHTML = counts.filter(([, n]) => n).map(([c, n]) =>
     `<div style="flex:${n};background:${c[2]};color:${fg(c[2])}" title="${c[1]}: ${n}">${n}</div>`).join('');
 }
@@ -811,7 +838,7 @@ function renderDetail() {
       ${r.spread >= 0.75 ? '<div class="warn">⚠ Sources disagree on this one</div>' : ''}
       <div class="chips">${r.sources.map(s => `<div class="chip" style="background:${color(s.score)};color:${Math.abs(s.score) >= 1.5 ? '#fff' : '#111'}"><span>${esc(s.name)}</span><b>${esc(s.rating)}</b></div>`).join('')}</div>
       ${raceTrail(({ senate: 'S', governor: 'G', president: 'P' })[office] + ':' + r.label).length > 1 ? `<div class="sub" style="margin-top:6px">Polymarket P(D), hour by hour (${raceTrail(({ senate: 'S', governor: 'G', president: 'P' })[office] + ':' + r.label).map(v => Math.round(v * 100)).join(' → ')}%)</div>${spark(raceTrail(({ senate: 'S', governor: 'G', president: 'P' })[office] + ':' + r.label), 260, 36)}` : ''}
-      ${m ? `<div class="sub">Polymarket: <b>${esc(m.leader)}</b> ${pct(m.leaderP)}${m.pD != null ? ` · P(D) ${pct(m.pD)}` : ''} · $${(m.volume / 1e3).toFixed(0)}k volume · <a href="${esc(m.url)}" target="_blank" rel="noopener">market</a></div>` : '<div class="sub">No Polymarket market found.</div>'}`;
+      ${m ? `<div class="sub">Polymarket: <b>${esc(m.leader)}</b> ${pct(m.leaderP)}${m.pD != null ? ` · P(D) ${pct(m.pD)}` : ''} · $${(m.volume / 1e3).toFixed(0)}k volume · <a href="${esc(m.url)}" target="_blank" rel="noopener">market</a></div>` : '<div class="sub">No Polymarket market found.</div>'}${r.districts?.length ? `<div class="sub">District electors (Kalshi): ${r.districts.map(d => `${nth(d.district)} <span style="color:${color(d.score)}">■</span> ${cat(d.score)[1]} ${pct(d.pD)}`).join(' · ')}</div>` : ''}${r.kalshi != null ? `<div class="sub">Kalshi: P(D) ${pct(r.kalshi)} · <a href="https://kalshi.com/markets/kxpresstate" target="_blank" rel="noopener">market</a></div>` : ''}`;
   }).join('<hr style="border:0;border-top:1px solid var(--line);margin:14px 0">');
 }
 
@@ -881,10 +908,10 @@ function renderEarly() {
 }
 
 function renderTable() {
-  const mk = races().some(r => r.market); // no district-level markets for the House
-  head([['label', office === 'president' ? 'State' : 'Race'], ['incumbent', office === 'president' ? '2024 result' : 'Incumbent'], ['flip', 'Held → likely'], ['abs', 'Consensus'], ['spread', 'Disagreement'], ...(mk ? [['pD', 'Polymarket P(D)'], [null, 'Polymarket leader']] : [])],
+  const mk = races().some(r => r.market), kc = races().some(r => r.kalshi != null); // no district-level markets for the House
+  head([['label', office === 'president' ? 'State' : 'Race'], ['incumbent', office === 'president' ? '2024 result' : 'Incumbent'], ['flip', 'Held → likely'], ['abs', 'Consensus'], ['spread', 'Disagreement'], ...(mk ? [['pD', 'Polymarket P(D)'], [null, 'Polymarket leader']] : []), ...(kc ? [['kalshi', 'Kalshi P(D)']] : [])],
     'Sorted by closest race. "Disagreement" = how far apart the sources are (std. dev. on a −3…+3 scale).');
-  const val = r => ({ abs: Math.abs(r.score ?? 9), pD: r.market?.pD ?? -1, flip: likely(r) === r.incParty ? 1 : 0 }[sortKey] ?? r[sortKey]);
+  const val = r => ({ abs: Math.abs(r.score ?? 9), pD: r.market?.pD ?? -1, kalshi: r.kalshi ?? -1, flip: likely(r) === r.incParty ? 1 : 0 }[sortKey] ?? r[sortKey]);
   const rows = sorted(races(), val);
   const tb = document.getElementById('rows');
   tb.innerHTML = rows.map(r => `<tr data-s="${esc(r.state)}">
@@ -892,7 +919,7 @@ function renderTable() {
     <td>${!r.incParty ? `${tag(r.score > 0 ? 'D' : 'R')} favored <span class="sub">(open)</span>` : likely(r) === r.incParty ? `${tag(r.incParty)} hold` : `${tag(r.incParty)} → ${tag(likely(r))} <b>flip</b>`}</td>
     <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color(r.score)}"></span> ${cat(r.score)[1]}</td>
     <td>${r.spread >= 0.75 ? '<span class="warn">' + r.spread + '</span>' : r.spread}</td>
-    ${mk ? `<td>${pct(r.market?.pD)}</td><td>${esc(r.market?.leader ?? '—')} ${r.market ? pct(r.market.leaderP) : ''}</td>` : ''}</tr>`).join('');
+    ${mk ? `<td>${pct(r.market?.pD)}</td><td>${esc(r.market?.leader ?? '—')} ${r.market ? pct(r.market.leaderP) : ''}</td>` : ''}${kc ? `<td>${pct(r.kalshi)}</td>` : ''}</tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
 }
 </script>

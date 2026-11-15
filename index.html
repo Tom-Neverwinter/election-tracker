@@ -160,18 +160,26 @@ const share = s => s.cast / s.turnout22; // ponytail: share of total 2022 turnou
 const evColor = d3.scaleSequential([0, 0.5], d3.interpolateGreens).clamp(true);
 const fmt = d3.format(',');
 const num = v => v == null ? '—' : fmt(v);
-const pop = s => POP[s.state_name][0], elig = s => POP[s.state_name][1], voted = s => s.cast / elig(s);
+let CNT; // votes counted by state once this year's results are in: its highest-office vote (biggest statewide race, or all its House races together)
+function countedVotes() {
+  const m = new Map(); if (!R?.day?.startsWith(String(new Date().getFullYear())) || (saved && day <= R.day)) return m; // a saved day up to Election Day shows its own early vote
+  for (const [st, rs] of d3.group(R.races, r => r.state)) { const n = Math.max(d3.max(rs.filter(r => r.district == null), r => r.votes ?? 0) ?? 0, d3.sum(rs.filter(r => r.office === 'H'), r => r.votes ?? 0)); if (n) m.set(st, n); }
+  return m;
+}
+const counted = st => (CNT ??= countedVotes()).get(st), done = () => (CNT ??= countedVotes()).size > 0;
+const pop = s => POP[s.state_name][0], elig = s => POP[s.state_name][1], voted = s => (counted(s.state_name) ?? s.cast) / elig(s);
 const pct1 = p => (p * 100).toFixed(1) + '%';
 const feed = s => s.feedCast ?? s.cast; // what the automatic feed reported, before any hand correction
 const per = s => Math.round(s.cast / elig(s) * 1e5), perPop = s => Math.round(s.cast / pop(s) * 1e5); // ballots per 100,000 eligible voters / residents
 const rateColor = d3.scaleSequential([0, 40000], d3.interpolateGreens).clamp(true);
 const castColor = d3.scaleSequentialSqrt([0, 7e6], d3.interpolateGreens).clamp(true); // sqrt so Texas and California don't wash out everyone else
 const MODES = {
+  turnout: { label: 'Turnout', val: s => voted(s), color: d3.scaleSequential([0.3, 0.7], d3.interpolateGreens).clamp(true), stops: [.3, .4, .5, .6, .7], show: v => pct(v), unit: 'of eligible voters voted (votes counted so far)' },
   per: { label: 'Per 100k eligible', val: s => per(s), color: rateColor, stops: [0, 10000, 20000, 30000, 40000], show: v => fmt(v), unit: 'ballots per 100,000 eligible voters' },
   share: { label: '% of 2022 vote', val: s => share(s), color: evColor, stops: [0, .1, .2, .3, .4, .5], show: v => pct(v), unit: "of the state's total 2022 vote, already cast" },
   cast: { label: 'Raw ballots', val: s => s.cast, color: castColor, stops: [0, 100000, 500000, 1000000, 3000000, 7000000], show: v => d3.format('.2~s')(v), unit: 'ballots cast (not adjusted for size)' },
 };
-let mode = localStore('evMode') in MODES ? localStore('evMode') : 'per';
+let mode = localStore('evMode') in MODES ? localStore('evMode') : 'turnout';
 document.getElementById('modes').innerHTML = Object.entries(MODES).map(([k, m]) => `<button data-m="${k}">${m.label}</button>`).join('');
 document.querySelectorAll('#modes button').forEach(b => b.onclick = () => { mode = b.dataset.m; localStore('evMode', mode); renderEarly(); });
 const races = () => D[office].races;
@@ -394,10 +402,11 @@ function tchart(title, series, { fmt = v => v, lo, hi, ref } = {}) { // small mu
   if (y.domain()[0] === y.domain()[1]) y.domain([y.domain()[0] - 1, y.domain()[1] + 1]);
   const line = d3.line(p => x(p[0]), p => y(p[1]));
   const grid = y.ticks(4).map(v => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${m.l - 4}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="var(--mute)">${fmt(v)}</text>`).join('');
-  const xt = (HR.length < 5 ? ts : x.ticks(4)).map(v => `<text x="${x(v)}" y="${H - 5}" text-anchor="middle" font-size="10" fill="var(--mute)">${d3.timeFormat('%a %-I%p')(v)}</text>`).join('');
+  const xt = (HR.length < 5 ? ts : x.ticks(4)).map(v => `<text x="${x(v)}" y="${H - 5}" text-anchor="middle" font-size="10" fill="var(--mute)">${d3.timeFormat(x.domain()[1] - x.domain()[0] > 3 * 864e5 ? '%b %-d' : '%a %-I%p')(v)}</text>`).join('');
   const refl = ref == null ? '' : `<line x1="${m.l}" x2="${W - m.r}" y1="${y(ref)}" y2="${y(ref)}" stroke="var(--mute)" stroke-dasharray="3 3"/>`;
-  const lines = series.filter(s => s.pts.length).map(s => { const last = s.pts.at(-1);
-    return `<path d="${line(s.pts)}" fill="none" stroke="${s.color}" stroke-width="2"/>${s.pts.length === 1 ? `<circle cx="${x(last[0])}" cy="${y(last[1])}" r="3" fill="${s.color}"/>` : ''}<text x="${x(last[0]) + 4}" y="${y(last[1]) + 4}" font-size="10" fill="${s.color}">${s.name} ${fmt(last[1])}</text>`; }).join('');
+  const used = [];
+  const lines = series.filter(s => s.pts.length).map(s => { const last = s.pts.at(-1); let ly = y(last[1]) + 4; while (used.some(u => Math.abs(u - ly) < 11)) ly += 11; used.push(ly);
+    return `<path d="${line(s.pts)}" fill="none" stroke="${s.color}" stroke-width="2"/>${s.pts.length === 1 ? `<circle cx="${x(last[0])}" cy="${y(last[1])}" r="3" fill="${s.color}"/>` : ''}<text x="${x(last[0]) + 4}" y="${ly}" font-size="10" fill="${s.color}">${s.name} ${fmt(last[1])}</text>`; }).join('');
   return `<div class="card" style="padding:10px"><b style="font-size:13px">${title}</b><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(title)}">${grid}${xt}${refl}${lines}</svg></div>`;
 }
 const hrSeries = (get, name, color) => ({ name, color, pts: HR.map(h => [new Date(h.t), get(h)]).filter(p => p[1] != null) });
@@ -668,6 +677,48 @@ function tipping() { // walk from the winner's safest units toward the closest; 
   let n = 0; for (const u of dWins ? us : us.reverse()) if ((n += u.ev) >= 270) return u;
 }
 
+const evAt = h => { // electoral votes by Polymarket state favorite at one hourly capture (2024 winner where a state had no market)
+  const ev = { D: 0, R: 0 }; for (const [st, n] of Object.entries(ELECTORS)) { const p = h.race['P:' + st], w = p != null ? (p > 0.5 ? 'D' : 'R') : PRESIDENT.states[st]?.[2024]?.[2]; if (w in ev) ev[w] += n; }
+  return ev; };
+function presTug() { // tug of war: D pulls from the left by category, R from the right; the line is 270
+  const us = evUnits(), ev = s => d3.sum(us, u => uSide(u) === s ? u.ev : 0);
+  const seg = c => { const n = d3.sum(us.filter(u => cat(u.score) === c), u => u.ev); return n ? `<div style="flex:${n};background:${c[2]};color:${fg(c[2])}" title="${c[1]}: ${n}">${n >= 20 ? n : ''}</div>` : ''; };
+  return `<div style="margin:10px 0 12px">
+    <div style="display:flex;justify-content:space-between;font-size:14px"><span>${tag('D')} <b style="font-size:18px">${ev('D')}</b></span><span><b>Electoral votes</b> <span class="sub">270 to win</span></span><span><b style="font-size:18px">${ev('R')}</b> ${tag('R')}</span></div>
+    <div style="position:relative"><div class="seats" style="height:26px">${CATS.map(seg).join('')}</div>
+      <div style="position:absolute;left:${270 / 538 * 100}%;top:-3px;bottom:-1px;border-left:2px solid var(--ink)"></div></div></div>`;
+}
+function presCharts() {
+  let best = 0; const evPts = []; // skip captures where most state markets failed to load (they'd fall back to 2024 and spike)
+  for (const h of HR) { const n = Object.keys(h.race ?? {}).filter(k => k.startsWith('P:')).length; if (n >= 10 && n >= best * 0.8) evPts.push([new Date(h.t), evAt(h)]); best = Math.max(best, n); }
+  const s = [hrSeries(h => h.mkt.P, 'Polymarket', '#9b6bcc'), hrSeries(h => h.mkt.PK, 'Kalshi', '#38a169')];
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
+    ${tchart('Chance Democrats win 2028', s, { fmt: p => Math.round(p * 100) + '%', lo: 0, hi: 1, ref: 0.5 })}
+    ${tchart('Electoral votes by state favorite (Polymarket)', [['D', 'var(--d)'], ['R', 'var(--r)']].map(([p, c]) => ({ name: p, color: c, pts: evPts.map(([t], i) => [t, d3.median(evPts.slice(Math.max(0, i - 2), i + 3), q => q[1][p])]) })) /* rolling median of 5 captures: new or thin markets blip through 50% for an hour */, { ref: 270 })}</div>`;
+}
+function horseshoe() { // 538 dots in a hemicycle, safest D on the left to safest R on the right
+  const seats = evUnits().sort((a, b) => b.score - a.score).flatMap(u => d3.range(u.ev).map(() => u)), N = seats.length, rows = 12, r0 = 0.4;
+  const radii = d3.range(rows).map(i => r0 + (1 - r0) * i / (rows - 1)), tot = d3.sum(radii), pos = [];
+  let left = N; radii.forEach((r, i) => { const n = i === rows - 1 ? left : Math.round(N * r / tot); left -= n; for (let j = 0; j < n; j++) pos.push([Math.PI * (1 - j / (n - 1)), r]); });
+  pos.sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  const X = (a, r) => 150 + 140 * r * Math.cos(a), Y = (a, r) => 150 - 140 * r * Math.sin(a);
+  const dots = pos.map(([a, r], i) => `<circle cx="${X(a, r).toFixed(1)}" cy="${Y(a, r).toFixed(1)}" r="2.9" fill="${color(seats[i].score)}" data-s="${esc(seats[i].state)}" style="cursor:pointer"><title>${esc(seats[i].label)}: ${cat(seats[i].score)[1]}</title></circle>`).join('');
+  return `<svg viewBox="0 0 300 160" width="100%" role="img" aria-label="Electoral votes as a horseshoe, D left to R right">${dots}
+    <line x1="150" x2="150" y1="${150 - 140 * r0 + 6}" y2="4" stroke="var(--ink)" stroke-width="1.5"/><text x="150" y="${150 - 140 * r0 + 20}" text-anchor="middle" font-size="11" fill="var(--mute)">270</text></svg>`;
+}
+function presStats() {
+  const us = evUnits(), P = D.president, sum = a => d3.sum(a, u => u.ev), li = a => a.map(u => `${esc(u.label)} <span class="sub">${u.ev}</span>`).join(', ');
+  const firmD = sum(us.filter(u => u.score >= 1.5)), firmR = sum(us.filter(u => u.score <= -1.5));
+  const flips = s => us.filter(u => u.district == null && u.r.incParty && u.r.incParty !== s && uSide(u) === s);
+  const close = [...us].sort((a, b) => Math.abs(a.score) - Math.abs(b.score)).slice(0, 6);
+  const gaps = P.races.filter(r => r.market?.pD != null && r.kalshi != null).map(r => [r, Math.abs(r.market.pD - r.kalshi)]).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const row = (t, v) => `<div style="margin-top:8px"><b>${t}</b><div class="sub">${v}</div></div>`;
+  return row('Safe + likely', `${tag('D')} ${firmD} · ${tag('R')} ${firmR} · ${270 - firmD > 0 ? `D needs ${270 - firmD} more from Lean/Tossup states` : 'D is past 270 without them'}${270 - firmR > 0 ? `, R needs ${270 - firmR}` : ''}`)
+    + row('Flips from 2024', `→ ${tag('D')} ${sum(flips('D'))} EV: ${li(flips('D')) || 'none'}<br>→ ${tag('R')} ${sum(flips('R'))} EV: ${li(flips('R')) || 'none'}`)
+    + row('Closest', close.map(u => `${esc(u.label)} <span class="sub">${u.ev}</span> <span style="color:${color(u.score)}">■</span> ${cat(u.score)[1]}`).join(' · '))
+    + (gaps.length ? row('Polymarket vs Kalshi, widest gaps', gaps.map(([r]) => `${esc(r.state)}: ${pct(r.market.pD)} vs ${pct(r.kalshi)}`).join(' · ')) : '');
+}
+
 function presLine(full) {
   const P = D.president; if (!P) return '';
   const ev = { D: 0, R: 0 }; for (const u of evUnits()) ev[uSide(u)] = (ev[uSide(u)] ?? 0) + u.ev;
@@ -700,7 +751,7 @@ function renderFlow() { // the 2026 outlook: just the open office on its own tab
   if (el.hidden) return;
   const live = R?.races?.length && R.races.some(r => r.votes) ? `<div class="sub">Nov 3 results · tug of war · dark = called (incl. seats not up), light = leading · updated ${new Date(R.updated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>${['senate', 'house', 'governor'].map(tug).join('')}` : '';
   if (live && office !== 'president') return el.innerHTML = live;
-  if (office === 'president') return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2028 outlook (markets only; forecasters haven't rated 2028 yet)</div>${presLine(true)}`;
+  if (office === 'president') return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2028 outlook (markets only; forecasters haven't rated 2028 yet)</div>${presLine(true)}${presTug()}${presCharts()}`;
   if (office in NOT_UP) return el.innerHTML = `<div class="sub" style="margin-bottom:6px">2026 outlook: who holds power now, and who's favored in each race (consensus of forecasters and Polymarket)</div>${chamberLine(office, true)}`;
   el.innerHTML = `<div class="sub" style="margin-bottom:6px">2026 outlook</div>${chamberLine('senate')}${chamberLine('house')}${chamberLine('governor')}${presLine()}`;
 }
@@ -829,6 +880,8 @@ function renderDetail() {
   const el = document.getElementById('detail');
   const all = sel && byState().get(sel), rs = office === 'house' && all ? all.filter(r => r.sources.length) : all;
   const safe = office === 'house' && all ? all.filter(r => !r.sources.length) : [];
+  if (!all && office === 'president') { el.innerHTML = `${horseshoe()}${presStats()}<div class="sub" style="margin-top:10px">Click a state or dot for its markets.</div>`;
+    el.querySelectorAll('circle[data-s]').forEach(c => c.onclick = () => { sel = c.dataset.s; render(); }); return; }
   if (!all) { el.innerHTML = '<div class="sub">Click a state (or a table row) for every source\'s rating.</div>'; return; }
   el.innerHTML = (safe.length ? `<div class="sub" style="margin-bottom:10px">${esc(sel)}: ${all.length} seats. ${safe.length} not rated competitive (safe by 2026 lean): ${tag('D')} ${safe.filter(r => r.score > 0).length} · ${tag('R')} ${safe.filter(r => r.score < 0).length}</div>` : '') + rs.map(r => {
     const m = r.market;
@@ -855,24 +908,35 @@ document.querySelector('table').onkeydown = e => { if (e.key === 'Enter' && e.ta
 const sorted = (rows, val) => [...rows].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sortDir);
 
 function renderEarly() {
+  if (mode === 'turnout' && !done()) mode = 'per'; // before results come in there's only the early vote
   const M = MODES[mode];
-  document.querySelectorAll('#modes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === mode));
+  document.querySelectorAll('#modes button').forEach(b => { b.setAttribute('aria-pressed', b.dataset.m === mode); b.hidden = b.dataset.m === 'turnout' && !done(); });
   const E = D.early, states = E.states;
   const total = d3.sum(states, s => s.cast), t22 = d3.sum(states, s => s.turnout22);
   const nat = E.dates.map((_, i) => d3.sum(states.filter(s => s.series), s => s.series[i])); // hand-entered states: feed lifted by news-report points
   const allPop = d3.sum(Object.values(POP), p => p[0]), allElig = d3.sum(Object.values(POP), p => p[1]), repElig = d3.sum(states, elig);
-  const turnoutBar = v => `<div class="seats" title="share of eligible voters"><div style="flex:${v};background:#38a169;color:#fff">Voted ${pct1(v)}</div><div style="flex:${1 - v};background:var(--none);color:var(--ink)">Not yet ${pct1(1 - v)}</div></div>`;
+  const turnoutBar = v => `<div class="seats" title="share of eligible voters"><div style="flex:${v};background:#38a169;color:#fff">Voted ${pct1(v)}</div><div style="flex:${1 - v};background:var(--none);color:var(--ink)">${done() ? "Didn't vote" : 'Not yet'} ${pct1(1 - v)}</div></div>`;
+  const cnt = d3.sum(states, s => counted(s.state_name) ?? 0);
   const ps = states.filter(s => s.dem != null), pt = d3.sum(ps, s => s.dem + s.rep + s.other);
   document.getElementById('legend').innerHTML = M.stops.map((v, i) => `<span><i style="background:${M.color(v)}"></i>${M.show(v)}${i === M.stops.length - 1 ? '+' : ''}</span>`).join('') +
     `<span><i style="background:var(--none)"></i>Not reporting</span> <span>${M.unit}</span>`;
   d3.selectAll('path.st')
-    .attr('fill', f => EV.has(f.properties.name) ? M.color(M.val(EV.get(f.properties.name))) : 'var(--none)')
+    .attr('fill', f => { const n = f.properties.name; return mode === 'turnout' && counted(n) ? M.color(counted(n) / POP[n][1]) : EV.has(n) ? M.color(M.val(EV.get(n))) : 'var(--none)'; })
     .classed('sel', f => f.properties.name === sel)
-    .select('title').text(f => { const s = EV.get(f.properties.name); return s ? `${s.state_name}: ${fmt(s.cast)} cast · ${fmt(per(s))} per 100,000 eligible · ${pct(share(s))} of 2022 vote` : `${f.properties.name}: not reporting`; });
+    .select('title').text(f => { const s = EV.get(f.properties.name), n = f.properties.name; if (mode === 'turnout' && counted(n)) return `${n}: ${fmt(counted(n))} votes counted · ${pct1(counted(n) / POP[n][1])} of eligible voters`; return s ? `${s.state_name}: ${fmt(s.cast)} cast · ${fmt(per(s))} per 100,000 eligible · ${pct(share(s))} of 2022 vote` : `${f.properties.name}: not reporting`; });
   document.getElementById('seats').innerHTML = '';
   const s = sel && EV.get(sel), el = document.getElementById('detail');
   const partyLine = (d, r, o, n) => `<div class="seats" title="registered party of voters who've cast ballots"><div style="flex:${d};background:#4a86c8;color:#fff">D ${pct(d / n)}</div><div style="flex:${o};background:var(--none);color:var(--ink)">Other ${pct(o / n)}</div><div style="flex:${r};background:#d86464;color:#fff">R ${pct(r / n)}</div></div>`;
-  el.innerHTML = !s ? `<h2 style="margin:0;font-size:18px">Nationwide</h2>
+  el.innerHTML = !s && done() ? `<h2 style="margin:0;font-size:18px">Nationwide turnout</h2>
+      <div style="font-size:26px;font-weight:700">${fmt(cnt)}</div><div class="sub">votes counted so far (highest office in each state) · results as of ${new Date(R.updated).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
+      <div style="margin-top:8px" class="sub">Of ${fmt(repElig)} eligible voters in these ${states.length} places:</div>
+      ${turnoutBar(cnt / repElig)}
+      <div class="sub">${cnt >= t22 ? 'up' : 'down'} ${pct(Math.abs(cnt / t22 - 1))} from these states' 2022 vote · some states are still counting</div>
+      <div style="margin-top:10px"><b>Before Election Day</b></div><div class="sub">${fmt(total)} early and mail ballots (${pct(total / cnt)} of all votes) as of ${E.asOf}, when the early-vote feed stopped</div>
+      ${spark(nat)}<div class="sub">Cumulative early ballots, ${E.dates[0]} → ${E.asOf}</div>
+      <div style="margin-top:10px" class="sub">Party registration of early voters, ${ps.length} states that report it:</div>${partyLine(d3.sum(ps, s => s.dem), d3.sum(ps, s => s.rep), d3.sum(ps, s => s.other), pt)}
+      <p class="sub">Registration ≠ vote choice. Click a state for details.</p>`
+    : !s ? `<h2 style="margin:0;font-size:18px">Nationwide</h2>
       <div style="font-size:26px;font-weight:700">${fmt(total)}</div><div class="sub">corrected total · feed alone ${fmt(d3.sum(states, feed))} · hand corrections add ${fmt(total - d3.sum(states, feed))}</div><div class="sub">ballots cast in ${states.length} reporting places (states + DC) as of ${E.asOf} · ${pct(total / t22)} of those states' 2022 total vote</div>
       <div style="margin-top:8px" class="sub">US population ${fmt(allPop)} · ${fmt(allElig)} eligible voters. In the reporting places, of ${fmt(repElig)} eligible:</div>
       ${turnoutBar(total / repElig)}
@@ -882,7 +946,7 @@ function renderEarly() {
       <div style="margin-top:10px" class="sub">Party registration of early voters, ${ps.length} states that report it:</div>${partyLine(d3.sum(ps, s => s.dem), d3.sum(ps, s => s.rep), d3.sum(ps, s => s.other), pt)}
       <p class="sub">Registration ≠ vote choice, and early voters skew differently than Election Day voters: mail leans D, early in-person leaned R in 2024. Compare a state to its own history, not to 50/50. Click a state for details.</p>`
     : `<h2 style="margin:0;font-size:18px">${esc(s.state_name)}</h2>
-      <div style="font-size:26px;font-weight:700">${fmt(s.cast)}</div><div class="sub">ballots cast as of ${esc(s.date)} · ${pct(share(s))} of 2022's total vote (${fmt(s.turnout22)})</div>
+      ${counted(s.state_name) ? `<div style="font-size:26px;font-weight:700">${fmt(counted(s.state_name))}</div><div class="sub">votes counted so far · ${pct(counted(s.state_name) / s.turnout22)} of 2022's total (${fmt(s.turnout22)})</div><div class="sub">Early and mail before Election Day: ${fmt(s.cast)} (${pct(s.cast / counted(s.state_name))} of the count) as of ${esc(s.date)}</div>` : `<div style="font-size:26px;font-weight:700">${fmt(s.cast)}</div><div class="sub">ballots cast as of ${esc(s.date)} · ${pct(share(s))} of 2022's total vote (${fmt(s.turnout22)})</div>`}
       <div style="margin-top:8px" class="sub">Population ${fmt(pop(s))} · ${fmt(elig(s))} eligible voters</div>
       ${turnoutBar(voted(s))}
       <div class="sub">${fmt(per(s))} ballots per 100,000 eligible voters · ${fmt(perPop(s))} per 100,000 residents</div>
@@ -892,16 +956,16 @@ function renderEarly() {
       <div class="sub">Mail returned ${num(s.returned)} of ${num(s.requested)} requested · in-person early ${num(s.inperson)}</div>
       ${s.dem != null ? partyLine(s.dem, s.rep, s.other, s.dem + s.rep + s.other) : '<div class="sub" style="margin-top:8px">State doesn\'t report party of early voters.</div>'}
       ${raceIn(s.state_name).map(([o, r]) => `<div style="margin-top:6px"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${color(r.score)}"></span> ${o === 'governor' ? 'Governor' : 'Senate'}: ${cat(r.score)[1]}${r.market?.pD != null ? ` · market D ${pct(r.market.pD)}` : ''}</div>`).join('')}`;
-  head([['state_name', 'State'], ['cast', 'Ballots (corrected)'], ['feed', 'Feed count'], ['added', 'Added'], ['pop', 'Population'], ['elig', 'Eligible voters'], ['per', 'Per 100k eligible'], ['perPop', 'Per 100k residents'], ['voted', 'Voted so far'], ['notyet', 'Not yet'], ['share', '% of 2022 vote'], ['returned', 'Mail'], ['inperson', 'In person'], ['demShare', 'Reg. D'], ['repShare', 'Reg. R'], [null, 'Trend']],
-    'Click a column to sort. Per 100k = ballots per 100,000 people, so states of any size compare directly. Eligible = citizens 18+. "Not yet" includes people who will vote by Election Day. * = hand-corrected, ? = count looks wrong but has no confirmed replacement. Party = voters\' registration, only where the state reports it.');
-  const v = r => ({ feed: feed(r), added: r.cast - feed(r), share: share(r), per: per(r), perPop: perPop(r), pop: pop(r), elig: elig(r), voted: voted(r), notyet: 1 - voted(r), demShare: r.dem != null ? r.dem / r.cast : -1, repShare: r.rep != null ? r.rep / r.cast : -1 }[sortKey] ?? r[sortKey]);
+  head([['state_name', 'State'], ['cast', 'Ballots (corrected)'], ['feed', 'Feed count'], ['added', 'Added'], ['pop', 'Population'], ['elig', 'Eligible voters'], ['per', 'Per 100k eligible'], ['perPop', 'Per 100k residents'], ...(done() ? [['counted', 'Votes counted'], ['voted', 'Turnout'], ['notyet', "Didn't vote"]] : [['voted', 'Voted so far'], ['notyet', 'Not yet']]), ['share', '% of 2022 vote'], ['returned', 'Mail'], ['inperson', 'In person'], ['demShare', 'Reg. D'], ['repShare', 'Reg. R'], [null, 'Trend']],
+    `Click a column to sort. Per 100k = ballots per 100,000 people, so states of any size compare directly. Eligible = citizens 18+. ${done() ? 'Turnout = votes counted ÷ eligible; ballots and per-100k columns are the early vote before Election Day.' : '"Not yet" includes people who will vote by Election Day.'} * = hand-corrected, ? = count looks wrong but has no confirmed replacement. Party = voters\' registration, only where the state reports it.`);
+  const v = r => ({ feed: feed(r), added: r.cast - feed(r), share: share(r), per: per(r), perPop: perPop(r), pop: pop(r), elig: elig(r), counted: counted(r.state_name) ?? -1, voted: voted(r), notyet: 1 - voted(r), demShare: r.dem != null ? r.dem / r.cast : -1, repShare: r.rep != null ? r.rep / r.cast : -1 }[sortKey] ?? r[sortKey]);
   const tb = document.getElementById('rows');
   tb.innerHTML = sorted(states, v).map(r => `<tr data-s="${esc(r.state_name)}"><td><b>${esc(r.state_name)}</b>${r.note ? ' *' : r.flag ? ' ?' : ''}</td><td>${fmt(r.cast)}</td><td>${r.note ? fmt(feed(r)) : '—'}</td><td>${r.note ? '+' + fmt(r.cast - feed(r)) : '—'}</td>
-    <td>${fmt(pop(r))}</td><td>${fmt(elig(r))}</td><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rateColor(per(r))}"></span> <b>${fmt(per(r))}</b></td><td>${fmt(perPop(r))}</td><td>${pct1(voted(r))}</td><td>${pct1(1 - voted(r))}</td>
+    <td>${fmt(pop(r))}</td><td>${fmt(elig(r))}</td><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rateColor(per(r))}"></span> <b>${fmt(per(r))}</b></td><td>${fmt(perPop(r))}</td>${done() ? `<td>${num(counted(r.state_name))}</td>` : ''}<td>${pct1(voted(r))}</td><td>${pct1(1 - voted(r))}</td>
     <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${evColor(share(r))}"></span> ${pct(share(r))}</td>
     <td>${num(r.returned)}</td><td>${num(r.inperson)}</td><td>${r.dem != null ? pct(r.dem / r.cast) : '—'}</td><td>${r.rep != null ? pct(r.rep / r.cast) : '—'}</td>
     <td style="width:90px">${r.series ? spark(r.series, 90, 20) : '—'}</td></tr>`).join('') +
-    Object.entries(POP).filter(([n]) => !EV.has(n)).map(([n, [p, e]]) => `<tr><td><b>${esc(n)}</b></td><td>not reporting</td><td>—</td><td>—</td><td>${fmt(p)}</td><td>${fmt(e)}</td><td colspan="10">—</td></tr>`).join('');
+    Object.entries(POP).filter(([n]) => !EV.has(n)).map(([n, [p, e]]) => `<tr><td><b>${esc(n)}</b></td><td>not reporting</td><td>—</td><td>—</td><td>${fmt(p)}</td><td>${fmt(e)}</td><td colspan="${done() ? 11 : 10}">—</td></tr>`).join('');
   tb.querySelectorAll('tr[data-s]').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
   const hand = states.filter(s => s.note).map(s => `<a href="${esc(s.source)}">${esc(s.state_name)}</a> (${esc(s.date)})`).join(', ');
   document.getElementById('srcs').innerHTML = `Early vote: <a href="${esc(E.source)}">Who Shows Up</a> (compiled by civicAPI from state and county election offices, updated each morning)${hand ? `. Hand-entered: ${hand}` : ''}. Population: Census 2025 estimates. Eligible voters: Census CVAP, ACS 2020–2024.`;

@@ -24,7 +24,7 @@ function summarize(cap) {
   const ev = Object.fromEntries((d.early?.states ?? []).map(s => [s.state_name, s.cast])); // early votes cast by state
   return {
     t: cap.captured, call, hs, ev,
-    mkt: { S: r3(d.control?.Senate?.['Democratic Party']), H: r3(d.control?.House?.['Democratic Party']), P: r3(d.president?.party?.Democratic) },
+    mkt: { S: r3(d.control?.Senate?.['Democratic Party']), H: r3(d.control?.House?.['Democratic Party']), P: r3(d.president?.party?.Democratic), PK: r3(d.president?.kalshi?.party?.Democratic) },
     seats: { S: seats('senate'), H: seats('house'), G: seats('governor') },
     early: d.early ? d.early.states.reduce((a, s) => a + s.cast, 0) : null,
     res: { S: called('S'), H: called('H'), G: called('G') },

@@ -32,6 +32,7 @@ Every badge above is live. The first row is site reachability, the GitHub Pages 
 | Early vote | Ballots cast before Election Day by state, per eligible voter and against 2022 |
 | Measures | Statewide ballot measures: 2026 with results, and past years |
 | Who voted | Every state: 2026 turnout of eligible citizens, who could vote (Census: citizens 18+ by age, sex and race), and who voted in 2016–2024 by age, sex and race (Census survey). Full 2026 turnout by age, race, party and sex, statewide and by county, where the state publishes it (North Carolina, Louisiana, Colorado; Washington after certification) |
+| Recounts | Every 2026 race decided by under 1%, each state's recount law, and the status of each recount, with sources |
 | States | Party control of each state government and trifectas, 1776 to today |
 | History | Turnout by state for any two elections from 1980 to 2024, and national turnout since 1789 |
 
@@ -50,8 +51,9 @@ There is no build step and no server. `index.html` is the whole app; it loads D3
 | `results.js` | `results-data.js` | NBC News results (Associated Press vote data) |
 | `measures-results.js` | `measures-results-data.js` | Wikipedia's 2026 ballot measures table, NBC News, and each measure's Wikipedia page |
 | `legislature-results.js` | `legislature-results-data.js` | Wikipedia, 2026 state legislative elections |
-| `state-demo.js` | `state-demo-data.js` | State election offices: North Carolina, Louisiana, Colorado, Washington |
-| `state-demo.js --past` (once) | `state-past-data.js` | Same state files for past general elections: North Carolina 2020–2024, Washington 2010–2024 |
+| `state-demo.js` | `state-demo-data.js` | State election offices: North Carolina, Louisiana, Colorado; Washington, Pennsylvania and Delaware switch on when they post 2026 |
+| `state-demo.js --past` (once) | `state-past-data.js` | Same state files for past general elections: North Carolina 2020–2024, Washington 2010–2024, Pennsylvania 2024, Delaware 2020–2024 |
+| — | `recount-rules.js` (by hand) | Recount laws (NASS summary and state statutes) and the status of close races, each with a source |
 | `eligible.js` (yearly, not hourly) | `eligible-data.js` | Census Bureau American Community Survey 2020–2024 |
 | `cps.js` (after each Census release) | `cps-data.js` | Census Current Population Survey voting supplement, 2016–2024: turnout by age, sex and race for every state |
 | `badges.js` | `badges/*.json` (README badges) | the data files above |

@@ -20,12 +20,26 @@ function parse(wiki) { // [{state, title, text, status, yes}] for November rows
   return rows;
 }
 
+// Results copied from a state's official site when no automatic source has them (state sites often block automated access).
+const MANUAL = {
+  'Florida|Agricultural Tangible Personal Property Tax Exemption Amendment': { result: 'Failed', yes: 58.21, src: 'Florida Division of Elections, floridaelectionwatch.gov (Amendment No. 2: 4,547,646 yes, 3,264,960 no; needs 60%), entered 2026-11-18' },
+};
+
+// The kind of measure plus its number or letter, e.g. "question 3", "amendment j", "proposition 41", "initiative 645", "initiative il26-638"; null if none.
+function designator(s) {
+  const m = String(s).match(/\b(question|proposition|propostion|proposal|amendment|measure|issue|initiative|referendum)\s+(?:no\.\s*)?([A-Z]{0,4}\d+[A-Z]?(?:-\d+)?|[A-Z])\b(?!-)/i);
+  return m ? `${m[1].toLowerCase().replace('propostion', 'proposition')} ${m[2].toLowerCase()}` : null;
+}
+
 function match(rows) {
   const out = {};
   for (const m of window.MEASURES) {
     const mine = rows.filter(r => r.state === m.state), title = !m.source.includes('#') ? decodeURIComponent(m.source.split('/wiki/')[1] ?? '').replace(/_/g, ' ') : null;
     let r = title && mine.find(r => r.title === title);
-    if (!r) { const want = norm(m.name); r = mine.map(r => [r, want.filter(w => norm(r.text).includes(w)).length / want.length]).filter(([, s]) => s >= 0.6).sort((a, b) => b[1] - a[1])[0]?.[0]; }
+    const id = designator(m.name); // "Question 3", "Amendment J": the number/letter must match exactly (norm() drops short words, so "3" vs "8" can't tell rows apart)
+    if (!r && id) r = mine.find(r => designator(r.text) === id);
+    if (!r && !id) { const want = norm(m.name), scored = mine.map(r => [r, want.filter(w => norm(r.text).includes(w)).length / want.length]).filter(([, s]) => s >= 0.6).sort((a, b) => b[1] - a[1]);
+      if (scored.length && !(scored[1] && scored[1][1] === scored[0][1])) r = scored[0][0]; } // a tie means we can't tell which row it is
     if (r?.status) out[`${m.state}|${m.name}`] = { result: r.status, yes: r.yes };
   }
   return out;
@@ -35,8 +49,13 @@ async function main() {
   const res = await fetch('https://en.wikipedia.org/w/index.php?title=2026_United_States_ballot_measures&action=raw', { headers: { 'User-Agent': 'ElectionTracker/1.0 (personal project)' } });
   if (!res.ok) throw new Error(`${res.status} from Wikipedia`);
   const rows = parse(await res.text()), out = match(rows), wiki = Object.keys(out).length;
-  Object.assign(out, { ...nbc(), ...out }); // Wikipedia wins where both have it
+  for (const [k, v] of Object.entries(nbc())) { // AP's call (via NBC) wins a disagreement; log it so the matcher gets fixed
+    if (out[k] && out[k].result !== v.result) console.warn(`measure conflict ${k}: Wikipedia ${out[k].result} ${out[k].yes}, NBC ${v.result} ${v.yes}; using NBC`);
+    if (!out[k] || out[k].result !== v.result) out[k] = v; }
   Object.assign(out, await pages(window.MEASURES.filter(m => !out[`${m.state}|${m.name}`])).catch(e => (console.warn('measure pages:', e.message), {})));
+  for (const [k, v] of Object.entries(MANUAL)) { // official results read off a state site by hand; automatic sources win unless they disagree
+    if (out[k] && out[k].result !== v.result) console.warn(`measure conflict ${k}: automatic ${out[k].result} ${out[k].yes}, hand-entered ${v.result} ${v.yes} (${v.src}); check it`);
+    out[k] ??= v; }
   const extra = Object.keys(out).length - wiki;
   fs.writeFileSync(path.join(__dirname, 'measures-results-data.js'), 'window.MEASURES_RESULTS = ' + JSON.stringify(out) + ';\n');
   console.log(`${rows.length} November rows on Wikipedia, ${rows.filter(r => r.status).length} decided; NBC + measure pages add ${extra}; ${Object.keys(out).length} of ${window.MEASURES.length} measures have a result`);
@@ -76,4 +95,4 @@ async function pages(missing) {
   }
   return out;
 }
-module.exports = { parse, match, nbc, pages };
+module.exports = { parse, match, nbc, pages, designator };

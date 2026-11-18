@@ -102,8 +102,14 @@ async function washington(year = 2026) {
 // Colorado's Secretary of State posts ballots returned by sex × age × party (statewide) and by party (per county), plus registration by the same groups.
 // These are unofficial returns, updated daily through Nov 13; registration is the Nov 1 count.
 async function colorado() {
-  const dir = path.join(CACHE, 'co');
-  const act = sheets(await download('https://www.coloradosos.gov/pubs/newsRoom/pressReleases/2026/20261111GenElectionActivity.xlsx', path.join(dir, 'act.xlsx')));
+  const dir = path.join(CACHE, 'co'), PR = 'https://www.coloradosos.gov/pubs/newsRoom/pressReleases/2026/';
+  // The state posts one file per day (named for the day the data runs through); take the newest that exists. Daily reports ended with Nov 12 data.
+  let act, asOf;
+  for (let d = new Date(); !act && d >= new Date('2026-11-04'); d.setDate(d.getDate() - 1)) {
+    const ymd = d.toLocaleDateString('en-CA').replace(/-/g, '');
+    try { act = sheets(await download(PR + ymd + 'GenElectionActivity.xlsx', path.join(dir, 'act.xlsx'))); asOf = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch {}
+  }
+  if (!act) throw new Error('CO: no ballot-return file found');
   const reg = sheets(await download('https://www.coloradosos.gov/pubs/elections/VoterRegNumbers/2026/OctoberStatistics2026.xlsx', path.join(dir, 'reg.xlsx')));
   const PARTY = { DEM: 'Democratic', REP: 'Republican', UAF: 'Unaffiliated' }, party = code => PARTY[code] ?? 'Other parties';
   const SEX = { Female: 'Female', FEMALE: 'Female', Male: 'Male', MALE: 'Male', 'Not Disclosed': 'Not stated', 'NOT DISCLOSED': 'Not stated', X: 'X' };
@@ -137,9 +143,79 @@ async function colorado() {
     const age = k === '75 AND OVER' ? '75+' : k; if (!sex || !AGES.includes(age)) continue; // '<18' = pre-registrants, left out
     g(state, 'age', age).voted += n; g(state, 'sex', sex).voted += n; }
   if (Object.keys(counties).length !== 64) throw new Error(`CO: parsed ${Object.keys(counties).length} counties`);
-  return { source: 'Colorado Secretary of State ballot returns (Nov 11) and voter registration (Nov 1)', url: 'https://www.coloradosos.gov/pubs/newsRoom/pressReleases/2026/PR20261112BallotReturns.html',
-    note: 'Colorado figures are unofficial ballots returned as of Nov 11, before certification. Age and sex are statewide only; counties are by party. Colorado does not record race. Registered = active and inactive voters on Nov 1.',
+  return { source: `Colorado Secretary of State ballot returns (through ${asOf}) and voter registration (Nov 1)`, url: 'https://www.coloradosos.gov/pubs/newsRoom/pressReleases/2026/PR20261113BallotReturns.html',
+    note: `Colorado figures are unofficial ballots returned through ${asOf}, before certification. Age and sex are statewide only; counties are by party. Colorado does not record race. Registered = active and inactive voters on Nov 1.`,
     countiesIn: 64, countiesAll: 64, state, counties };
+}
+
+// Pennsylvania's Department of State posts a "voter registration and vote history summary" spreadsheet per election: by county & party and by county & age.
+// File names change between elections, so for 2026 the loader finds the link on the election-data page; past years pass their URL.
+const PA_PAGE = 'https://www.pa.gov/agencies/dos/resources/voting-and-elections-resources/voting-and-election-statistics/election-data';
+async function pennsylvania(url) {
+  if (!url) { // 2026 general: look for its summary on the state's page
+    const html = await (await fetch(PA_PAGE, { headers: { 'User-Agent': 'ElectionTracker/1.0 (personal project)' } })).text();
+    const href = [...html.matchAll(/href="([^"]+\.xlsx)"/g)].map(m => m[1]).find(h => /2026[-_ ]?general(?!-primary)|2026%20general/i.test(h) && /vote[-_ %20]*history/i.test(h) && !/primary/i.test(h));
+    if (!href) throw new Error('2026 general not posted yet');
+    url = new URL(href, PA_PAGE).href;
+  }
+  const S = sheets(await download(url, path.join(CACHE, 'pa', 'summary.xlsx')));
+  const party = S['By county &amp; party'], age = S['By county &amp; age'];
+  if (!party || !age) throw new Error('PA layout changed: sheets missing');
+  const col = (rows, name) => { const i = rows[0].indexOf(name); if (i < 0) throw new Error('PA layout changed: no ' + name); return i; };
+  const PARTIES = { Democratic: 'Democratic', Republican: 'Republican', Libertarian: 'Other parties', Other: 'Other parties' };
+  const AGES = ['18 to 24', '25 to 34', '35 to 44', '45 to 54', '55 to 64', '65 to 74', '75+'];
+  const counties = {}, g = (c, dim, k) => ((c.by[dim] ??= {})[k] ??= { reg: 0, voted: 0 });
+  let total;
+  for (const r of party.slice(1)) { if (!r[0]) continue;
+    const c = { reg: 0, voted: 0, method: {}, complete: true, by: {} };
+    for (const [p, label] of Object.entries(PARTIES)) { const v = +r[col(party, `${p} Vote History`)], n = +r[col(party, `${p} Voter Registration`)]; c.voted += v; c.reg += n; g(c, 'party', label).voted += v; g(c, 'party', label).reg += n; }
+    if (r[0] === 'TOTAL') total = c; else counties[title(r[0])] = c; }
+  for (const r of age.slice(1)) { const c = counties[title(r[0] ?? '')]; if (!c) continue;
+    for (const a of AGES) { const k = a === '75+' ? '75+' : a.replace(' to ', '-'); g(c, 'age', k).voted += +r[col(age, `${a} Vote History`)]; g(c, 'age', k).reg += +r[col(age, `${a} Voter Registration`)]; } }
+  const state = rollup(counties);
+  if (!total || state.voted !== total.voted || state.reg !== total.reg) throw new Error(`PA: counties add to ${state.voted}/${state.reg}, TOTAL row says ${total?.voted}/${total?.reg}`);
+  if (Object.keys(counties).length !== 67) throw new Error(`PA: parsed ${Object.keys(counties).length} counties`);
+  return { source: 'Pennsylvania Department of State voter registration and vote history summary', url: PA_PAGE,
+    note: 'Pennsylvania reports turnout by party and by age, not by race or sex. Age excludes voters with placeholder birth dates and protected voters, so age groups add to slightly fewer voters than the party totals. Registered = voters on the rolls for the election.',
+    countiesIn: 67, countiesAll: 67, state, counties };
+}
+const title = s => String(s).toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+
+// Delaware's Department of Elections posts "Registered Voters by Age Group and Party" for each general election: a fixed-width report with a block
+// per election district, then county and statewide blocks. Age × party is crossed only within each block, so counties and the state get both.
+async function delaware(year = 2026) {
+  const res = await fetch(`https://elections.delaware.gov/voter/registrationtotals/reports/agprpt_${year}.txt`, { headers: { 'User-Agent': 'ElectionTracker/1.0 (personal project)' } });
+  if (res.status === 404) throw new Error(`${year} general not posted yet`);
+  if (!res.ok) throw new Error(`DE ${res.status}`);
+  const lines = (await res.text()).split(/\r?\n/), PARTY = ['Democratic', 'Republican', 'Other parties'];
+  const AGE = { 'Under 21': '18-20', '21-29': '21-29', '30-39': '30-39', '40-49': '40-49', '50-59': '50-59', '60-65': '60-65', 'Over 65': 'Over 65' };
+  const blocks = {}; // "KENT COUNTY" / "STATEWIDE" summary blocks: a heading line followed directly by the party header line
+  for (let i = 0; i + 1 < lines.length; i++) {
+    const head = lines[i].trim();
+    if (!/^([A-Za-z ]+ COUNTY|STATEWIDE)$/.test(head) || !/Democrat/.test(lines[i + 1])) continue;
+    const b = { rows: {} };
+    for (let j = i + 3; j < lines.length && /^\s+[a-i]\./.test(lines[j]); j++) {
+      const m = lines[j].match(/^\s+[a-i]\.\s+(.+?)\s{2,}([\d,].*)$/); if (!m) continue;
+      const n = m[2].trim().split(/\s+/).map(x => +x.replace(/,/g, '')); // [D reg, D voted, D %, R reg, R voted, R %, O reg, O voted, O %, T reg, T voted, T %]
+      b.rows[m[1].trim()] = n;
+    }
+    blocks[head] = b;
+  }
+  const unit = b => { const t = b.rows.Total; if (!t) throw new Error('DE: block without a Total row');
+    const u = { reg: t[9], voted: t[10], method: {}, complete: true, by: { age: {}, party: {} } };
+    PARTY.forEach((p, k) => u.by.party[p] = { reg: t[k * 3], voted: t[k * 3 + 1] });
+    for (const [row, label] of Object.entries(AGE)) { const r = b.rows[row]; if (!r) throw new Error('DE: missing age row ' + row); u.by.age[label] = { reg: r[9], voted: r[10] }; }
+    const sum = d => Object.values(u.by[d]).reduce((a, g) => a + g.voted, 0);
+    if (sum('age') !== u.voted || sum('party') !== u.voted) throw new Error(`DE: age ${sum('age')} / party ${sum('party')} don't add to ${u.voted}`);
+    return u; };
+  const counties = Object.fromEntries(Object.entries(blocks).filter(([k]) => k !== 'STATEWIDE').map(([k, b]) => [title(k.replace(/ COUNTY$/, '')), unit(b)]));
+  const state = unit(blocks.STATEWIDE ?? (() => { throw new Error('DE: no STATEWIDE block'); })());
+  const cs = rollup(counties);
+  if (cs.voted !== state.voted || cs.reg !== state.reg) throw new Error(`DE: counties add to ${cs.voted}, statewide says ${state.voted}`);
+  if (Object.keys(counties).length !== 3) throw new Error(`DE: parsed ${Object.keys(counties).length} counties`);
+  return { source: 'Delaware Department of Elections, Registered Voters by Age Group and Party', url: `https://elections.delaware.gov/voter/registrationtotals/reports/agprpt_${year}.txt`,
+    note: 'Delaware reports turnout by age group and party (Democrat, Republican, all others), not by race or sex. Registered = voters on the rolls for the election.',
+    countiesIn: 3, countiesAll: 3, state, counties };
 }
 
 function rollup(counties) { // statewide totals = sum of counties
@@ -175,7 +251,7 @@ const STATUS = {
 
 async function main() {
   const out = {}, errs = [];
-  for (const [st, load] of [['North Carolina', northCarolina], ['Louisiana', louisiana], ['Washington', washington], ['Colorado', colorado]]) try { out[st] = await load(); } catch (e) { errs.push(`${st}: ${e.message}`); } // one state failing keeps the others
+  for (const [st, load] of [['North Carolina', northCarolina], ['Louisiana', louisiana], ['Washington', washington], ['Colorado', colorado], ['Pennsylvania', () => pennsylvania()], ['Delaware', () => delaware()]]) try { out[st] = await load(); } catch (e) { errs.push(`${st}: ${e.message}`); } // one state failing keeps the others
   if (!Object.keys(out).length) throw new Error(errs.join('; '));
   for (const e of errs) console.warn('skipped ' + e);
   const status = Object.fromEntries(Object.entries(STATUS).filter(([st]) => !out[st]));
@@ -186,6 +262,8 @@ async function main() {
 const PAST = {
   'North Carolina': [['2024', '2024_11_05'], ['2022', '2022_11_08'], ['2020', '2020_11_03']].map(([y, f]) => [y, () => northCarolina(f)]),
   Washington: ['2024', '2022', '2020', '2018', '2016', '2014', '2012', '2010'].map(y => [y, () => washington(+y)]),
+  Pennsylvania: [['2024', () => pennsylvania('https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/bulk-data/2024-general-election/voter%20registration%20-%20vote%20history%20summary%20-%202024%20general.xlsx')]],
+  Delaware: ['2024', '2022', '2020'].map(y => [y, () => delaware(+y)]), // 2018 and earlier use an older report layout
 };
 async function buildPast() {
   const out = {};

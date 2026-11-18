@@ -53,7 +53,7 @@
 
   <div class="bar">
     <div class="tabs" role="group" aria-label="Offices"><button data-o="president">President</button><button data-o="senate">Senate</button><button data-o="house">House</button><button data-o="governor">Governor</button></div>
-    <div class="tabs" role="group" aria-label="Election 2026"><button data-o="results">Results</button><button data-o="timeline">Timeline</button><button data-o="early">Early vote</button><button data-o="measures">Measures</button><button data-o="demo">Who voted</button></div>
+    <div class="tabs" role="group" aria-label="Election 2026"><button data-o="results">Results</button><button data-o="timeline">Timeline</button><button data-o="early">Early vote</button><button data-o="measures">Measures</button><button data-o="demo">Who voted</button><button data-o="recount">Recounts</button></div>
     <div class="tabs" role="group" aria-label="Background"><button data-o="states">States</button><button data-o="history">History</button></div>
     <select class="pill" id="year" aria-label="Election year" style="color:inherit" hidden></select>
     <select class="pill" id="cmp" aria-label="Compare turnout with" style="color:inherit" hidden></select>
@@ -100,6 +100,7 @@
 <script src="eligible-data.js"></script>
 <script src="cps-data.js"></script>
 <script src="state-past-data.js"></script>
+<script src="recount-rules.js"></script>
 <script src="legislature-results-data.js"></script>
 <script src="certification.js"></script>
 <script src="past/measures.js"></script>
@@ -200,7 +201,7 @@ fetch('https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json').then
   geo = topojson.feature(us, us.objects.states).features;
   d3.select('#map').append('g').selectAll('path').data(geo).join('path')
     .attr('class', 'st').attr('d', d3.geoPath())
-    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (rkind === 'C' ? f.properties.name in CERT : (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name)) : office === 'early' ? EV.has(f.properties.name) : office === 'demo' ? !!window.ELIGIBLE?.[f.properties.name] : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
+    .on('click', (e, f) => { if (office === 'history' ? PAST.states[f.properties.name] : office === 'states' ? !!CTRL[f.properties.name]?.[year] : office === 'measures' ? (year === MEAS_NOW ? MEAS : PASTM.filter(m => m.year === year)).some(m => m.state === f.properties.name) : office === 'results' ? (rkind === 'C' ? f.properties.name in CERT : (R?.races ?? []).some(r => r.office === rkind && r.state === f.properties.name)) : office === 'early' ? EV.has(f.properties.name) : office === 'demo' ? !!window.ELIGIBLE?.[f.properties.name] : office === 'recount' ? !!window.ELIGIBLE?.[f.properties.name] : isPast() ? pastRows().some(r => r.state === f.properties.name) : byState().has(f.properties.name)) { sel = f.properties.name; render(); } })
     .append('title');
   render();
 });
@@ -224,6 +225,7 @@ function render() {
   if (rk && !isPast() && R?.day?.startsWith(String(new Date().getFullYear())) && R.races.some(r => r.votes)) { rkind = rk; return renderResults(); } // ponytail: once votes are in, the forecast tabs show results; the old forecast stays in each race's detail and the Timeline
   if (office === 'measures') return renderMeasures();
   if (office === 'demo') return renderDemo();
+  if (office === 'recount') return renderRecount();
   if (office === 'timeline') return renderTimeline();
   if (office === 'states') return renderStates();
   if (isPast()) return renderPast();
@@ -460,7 +462,71 @@ function renderEligible(el) { // a state without turnout by group: its 2026 turn
     <td>${x.turnout == null ? '—' : `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${sdColor(x.turnout)}"></span> <b>${pct(x.turnout)}</b>`}</td>
     <td>${pct(x.young)}</td><td>${pct(x.old)}</td><td>${pct(x.white)}</td><td>${pct(x.black)}</td><td>${pct(x.hisp)}</td><td class="sub">${x.detail}</td></tr>`).join('');
   tb.querySelectorAll('tr[data-s]').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
-  document.getElementById('srcs').innerHTML = 'Who could vote: <a href="https://www.census.gov/programs-surveys/acs/data/summary-file.html">Census Bureau American Community Survey 2020–2024</a> (tables B29001, B05003, B05003B–I). Past elections: <a href="https://www.census.gov/topics/public-sector/voting/data/tables.html">Census Current Population Survey voting supplement</a>, Tables 4b and 4c, 2016–2024. Past elections from state records: North Carolina State Board of Elections (2020–2024), Washington Secretary of State (2010–2024). Turnout: votes counted (highest office) from NBC News/AP results. Turnout by group: ' + Object.entries(SD).map(([st, x]) => `<a href="${esc(x.url)}">${esc(st)}</a>`).join(', ') + '.';
+  document.getElementById('srcs').innerHTML = 'Who could vote: <a href="https://www.census.gov/programs-surveys/acs/data/summary-file.html">Census Bureau American Community Survey 2020–2024</a> (tables B29001, B05003, B05003B–I). Past elections: <a href="https://www.census.gov/topics/public-sector/voting/data/tables.html">Census Current Population Survey voting supplement</a>, Tables 4b and 4c, 2016–2024. Past elections from state records: North Carolina State Board of Elections (2020–2024), Washington Secretary of State (2010–2024), Pennsylvania Department of State (2024), Delaware Department of Elections (2020–2024). Turnout: votes counted (highest office) from NBC News/AP results. Turnout by group: ' + Object.entries(SD).map(([st, x]) => `<a href="${esc(x.url)}">${esc(st)}</a>`).join(', ') + '.';
+}
+
+// ---- Recounts: close 2026 races against each state's recount law (recount-rules.js) ----
+const RR = window.RECOUNT_RULES ?? {}, RS = window.RECOUNT_STATUS ?? [];
+const RC_COLORS = { auto: '#e8590c', close: '#f2c94c', law: '#9fd3ae', none: 'var(--none)' };
+function closeRaces() { // every candidate race with its margin, by the measures each state's law uses
+  const out = [];
+  for (const r of R?.races ?? []) {
+    if (/^I/.test(r.office)) continue; // ballot measures
+    const c = [...r.cands].filter(x => x.votes != null).sort((a, b) => b.votes - a.votes);
+    if (c.length < 2 || !c[0].votes) continue;
+    const total = Math.max(r.votes ?? 0, d3.sum(c, x => x.votes)), diff = c[0].votes - c[1].votes; // r.votes = all votes for the office; the feed lists only the main candidates
+    out.push({ r, state: r.state, label: r.office === 'S' ? `${r.state} U.S. Senate` : r.office === 'G' ? `${r.state} Governor` : rLabel(r), office: r.office, district: r.district != null, lead: c[0], second: c[1], diff, total, pct: diff / total * 100,
+      top2: diff / (c[0].votes + c[1].votes) * 100, win: diff / c[0].votes * 100 });
+  }
+  return out;
+}
+function recountRule(x) { // null if the state has no rule that reaches this race; else { auto: bool, kind, text }
+  const rule = RR[x.state]; if (!rule) return null;
+  const statewide = !x.district, federal = x.office === 'S' || x.office === 'H';
+  if (rule.scope === 'statewide' && !statewide) return null;
+  if (rule.scope === 'statewide+federal' && !(statewide || federal)) return null;
+  const m = { total: x.pct, top2: x.top2, winner: x.win }[rule.base ?? 'total'], limit = x.district && rule.districtPct ? rule.districtPct : rule.pct;
+  const pctOk = limit == null ? false : rule.lt ? m < limit : m <= limit;
+  let hit;
+  if (rule.statewideVotes && !x.district) hit = pctOk && x.diff <= rule.statewideVotes; // North Carolina statewide: 0.5% or 10,000 votes, whichever is less
+  else if (rule.test === 'all') hit = pctOk && x.diff <= rule.votes; // both must hold (California, Washington)
+  else if (rule.test === 'greater') hit = x.diff <= Math.max(rule.votes, x.total * rule.pct / 100); // Hawaii: whichever is greater
+  else if (limit == null) hit = x.diff <= rule.votes; // Michigan: votes only
+  else hit = (pctOk && (rule.maxVotes == null || x.diff <= rule.maxVotes)) || (rule.orVotes != null && x.diff <= rule.orVotes)
+    || (x.state === 'New York' && x.total >= 1e6 && x.diff < 5000);
+  return { hit, kind: rule.kind ?? 'automatic', rule };
+}
+const ruleText = st => { const r = RR[st]; if (!r) return 'No automatic recount. A losing candidate may be able to request one; rules vary by state.';
+  return r.text ?? `Automatic recount at ${r.lt ? 'under' : ''} ${r.pct}% or less of the ${{ total: 'votes cast', top2: 'votes for the top two', winner: "winner's votes" }[r.base]}${r.scope === 'statewide' ? ', statewide races only' : ''}.`.replace('at under', 'under').replace(' or less', r.lt ? '' : ' or less'); };
+function renderRecount() {
+  const rows = closeRaces().filter(x => x.pct < 1).map(x => { const status = RS.find(s => s.state === x.state && s.race === x.label), rc = recountRule(x);
+    return { ...x, status, rc: rc && status?.trigger === false ? { ...rc, hit: false, official: true } : rc }; }); // the official determination on the final count wins
+  const by = d3.group(rows, x => x.state), el = document.getElementById('detail');
+  const cls = st => (by.get(st) ?? []).some(x => x.rc?.hit && x.rc.kind === 'automatic') ? 'auto' : by.has(st) ? 'close' : RR[st] && (RR[st].kind ?? 'automatic') === 'automatic' ? 'law' : 'none';
+  document.getElementById('legend').innerHTML = [['auto', 'Race inside the automatic-recount margin'], ['close', 'Race decided by under 1%'], ['law', 'Has an automatic-recount law'], ['none', 'No automatic recount']]
+    .map(([k, l]) => `<span><i style="background:${RC_COLORS[k]}"></i>${l}</span>`).join('');
+  d3.selectAll('path.st').attr('fill', f => RC_COLORS[cls(f.properties.name)]).classed('sel', f => f.properties.name === sel)
+    .select('title').text(f => { const st = f.properties.name, rs = by.get(st) ?? []; return `${st}: ${rs.length ? rs.map(x => `${x.label} by ${fmt(x.diff)} votes (${x.pct.toFixed(2)}%)`).join('; ') : 'no race under 1%'} · ${ruleText(st)}`; });
+  document.getElementById('seats').innerHTML = '';
+  const line = x => `<div style="margin:6px 0"><b>${esc(x.label)}</b> <span class="sub">${esc(x.lead.name)} (${rParty(x.lead.party)}) leads ${esc(x.second.name)} (${rParty(x.second.party)}) by ${fmt(x.diff)} votes, ${x.pct.toFixed(2)}%${x.r.called ? ' · called' : ' · not called'}</span>
+    ${x.rc ? `<div class="sub">${x.rc.hit ? (x.rc.kind === 'automatic' ? '<b style="color:#e8590c">Inside the automatic-recount margin</b>' : x.rc.kind === 'request' ? 'Within the margin where the loser can request a recount' : 'Within the margin where the governor may order a recount') : x.rc.official ? 'Outside the automatic-recount margin on the final count, per state officials' : 'Outside the automatic-recount margin'}</div>` : ''}
+    ${x.status ? `<div class="sub">Status: ${esc(x.status.status)} (<a href="${esc(x.status.source)}" target="_blank" rel="noopener">${esc(x.status.date)}</a>)</div>` : ''}</div>`;
+  const auto = rows.filter(x => x.rc?.hit && x.rc.kind === 'automatic');
+  el.innerHTML = sel && EL[sel] ? `<h2 style="margin:0;font-size:18px">${esc(sel)} · recounts</h2><div class="sub" style="margin:6px 0">${esc(ruleText(sel))}${RR[sel] ? ` <span>(${esc(RR[sel].cite)})</span>` : ''}</div>
+      ${(by.get(sel) ?? []).map(line).join('') || '<div class="sub">No race here was decided by under 1%.</div>'}
+      ${RS.filter(s => s.state === sel && !rows.some(x => x.label === s.race)).map(s => `<div class="sub" style="margin-top:6px"><b>${esc(s.race)}</b>: ${esc(s.status)} (<a href="${esc(s.source)}" target="_blank" rel="noopener">${esc(s.date)}</a>)</div>`).join('')}`
+    : `<h2 style="margin:0;font-size:18px">Recounts</h2><div class="sub" style="margin:6px 0">${rows.length} races decided by under 1% · ${auto.length} inside their state's automatic-recount margin</div>
+      ${auto.length ? `<b>Inside the automatic-recount margin</b>${auto.map(line).join('')}` : ''}
+      ${RS.length ? `<div style="margin-top:10px"><b>Other close races and recounts</b>${RS.filter(s => !auto.some(x => x.state === s.state && x.label === s.race)).map(s => `<div class="sub" style="margin:4px 0"><b>${esc(s.race.startsWith(s.state) ? s.race : s.state + ' ' + s.race)}</b>: ${esc(s.status)} (<a href="${esc(s.source)}" target="_blank" rel="noopener">${esc(s.date)}</a>)</div>`).join('')}</div>` : ''}
+      <p class="sub">Margins are from the latest counts and can still move. Whether a recount happens depends on the final certified margin, and in most states on a candidate asking for one. Status notes come from news reports, which can reflect later counts than these margins. Click a state for its law.</p>`;
+  head([['state', 'State'], ['label', 'Race'], ['lead', 'Leading'], ['diff', 'Margin (votes)'], ['pct', 'Margin %'], ['rule', 'State recount law'], ['hit', 'Automatic recount?'], ['called', 'Called'], ['status', 'Status']],
+    'Every race decided by under 1%, closest first. "Automatic recount?" applies the state\'s own threshold and base (total votes, top two, or the winner\'s votes).');
+  const v = x => ({ lead: x.lead.name, rule: RR[x.state] ? 1 : 0, hit: x.rc?.hit ? 1 : 0, called: x.r.called ? 1 : 0, status: x.status?.status ?? '' }[sortKey] ?? x[sortKey]);
+  const tb = document.getElementById('rows');
+  tb.innerHTML = sorted(rows, x => sortKey === 'abs' ? x.pct : v(x)).map(x => `<tr data-s="${esc(x.state)}"><td><b>${esc(x.state)}</b></td><td>${esc(x.label)}</td><td>${esc(x.lead.name)} (${rParty(x.lead.party)})</td><td>${fmt(x.diff)}</td><td>${x.pct.toFixed(2)}%</td>
+    <td class="sub">${RR[x.state] ? esc(RR[x.state].cite) : 'none automatic'}</td><td>${x.rc?.hit ? (x.rc.kind === 'automatic' ? '<b style="color:#e8590c">Yes</b>' : 'Can be requested') : 'No'}</td><td>${x.r.called ? 'Yes' : 'No'}</td><td class="sub">${esc(x.status?.status ?? '—')}</td></tr>`).join('');
+  tb.querySelectorAll('tr[data-s]').forEach(tr => tr.onclick = () => { sel = tr.dataset.s; render(); scrollTo({ top: 0, behavior: 'smooth' }); });
+  document.getElementById('srcs').innerHTML = 'Recount thresholds: <a href="https://www.nass.org/sites/default/files/reports/summary-canvass-certification-laws-oct2024.pdf">National Association of Secretaries of State, State Election Canvassing Timeframes and Recount Thresholds (Oct 2024)</a>, with each statute it cites. Margins: NBC News/AP results. Recount status: news and state election offices, linked per race.';
 }
 
 function renderMeasures() {
@@ -1010,7 +1076,7 @@ function head(cols, note) { // cols: [key|null, label]
   const tr = document.getElementById('thead');
   tr.innerHTML = cols.map(([k, l]) => `<th${k ? ` data-k="${k}" tabindex="0"` : ''}>${l}${k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
   tr.querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
-    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory, results: renderResults, measures: renderMeasures, demo: renderDemo, states: renderStates, timeline: renderTimeline }[office] ?? renderTable)();
+    sortDir = sortKey === th.dataset.k ? -sortDir : 1; sortKey = th.dataset.k; (isPast() ? renderPast : { early: renderEarly, history: renderHistory, results: renderResults, measures: renderMeasures, demo: renderDemo, recount: renderRecount, states: renderStates, timeline: renderTimeline }[office] ?? renderTable)();
   });
 }
 new MutationObserver(() => document.querySelectorAll('#rows tr[data-s]').forEach(tr => tr.tabIndex = 0)).observe(document.getElementById('rows'), { childList: true });
@@ -1026,7 +1092,9 @@ function renderEarly() {
   const nat = E.dates.map((_, i) => d3.sum(states.filter(s => s.series), s => s.series[i])); // hand-entered states: feed lifted by news-report points
   const allPop = d3.sum(Object.values(POP), p => p[0]), allElig = d3.sum(Object.values(POP), p => p[1]), repElig = d3.sum(states, elig);
   const turnoutBar = v => `<div class="seats" title="share of eligible voters"><div style="flex:${v};background:#38a169;color:#fff">Voted ${pct1(v)}</div><div style="flex:${1 - v};background:var(--none);color:var(--ink)">${done() ? "Didn't vote" : 'Not yet'} ${pct1(1 - v)}</div></div>`;
-  const cnt = d3.sum(states, s => counted(s.state_name) ?? 0);
+  const cnt = d3.sum(Object.keys(POP), st => counted(st) ?? 0), cntEV = d3.sum(states, s => counted(s.state_name) ?? 0); // all 50 states + DC; the early-vote places only
+  const T22_EXTRA = { Alabama: 1423409 }; // 2022 ballots for places the early-vote feed lacks: Alabama SOS "General Election 2022 Official Total Ballots Cast"
+  const t22All = Object.keys(POP).every(st => EV.has(st) || T22_EXTRA[st]) ? t22 + d3.sum(Object.keys(POP).filter(st => !EV.has(st)), st => T22_EXTRA[st]) : null;
   const ps = states.filter(s => s.dem != null), pt = d3.sum(ps, s => s.dem + s.rep + s.other);
   document.getElementById('legend').innerHTML = M.stops.map((v, i) => `<span><i style="background:${M.color(v)}"></i>${M.show(v)}${i === M.stops.length - 1 ? '+' : ''}</span>`).join('') +
     `<span><i style="background:var(--none)"></i>Not reporting</span> <span>${M.unit}</span>`;
@@ -1038,11 +1106,12 @@ function renderEarly() {
   const s = sel && EV.get(sel), el = document.getElementById('detail');
   const partyLine = (d, r, o, n) => `<div class="seats" title="registered party of voters who've cast ballots"><div style="flex:${d};background:#4a86c8;color:#fff">D ${pct(d / n)}</div><div style="flex:${o};background:var(--none);color:var(--ink)">Other ${pct(o / n)}</div><div style="flex:${r};background:#d86464;color:#fff">R ${pct(r / n)}</div></div>`;
   el.innerHTML = !s && done() ? `<h2 style="margin:0;font-size:18px">Nationwide turnout</h2>
-      <div style="font-size:26px;font-weight:700">${fmt(cnt)}</div><div class="sub">votes counted so far (highest office in each state) · results as of ${new Date(R.updated).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
-      <div style="margin-top:8px" class="sub">Of ${fmt(repElig)} eligible voters in these ${states.length} places:</div>
-      ${turnoutBar(cnt / repElig)}
-      <div class="sub">${cnt >= t22 ? 'up' : 'down'} ${pct(Math.abs(cnt / t22 - 1))} from these states' 2022 vote · some states are still counting</div>
-      <div style="margin-top:10px"><b>Before Election Day</b></div><div class="sub">${fmt(total)} early and mail ballots (${pct(total / cnt)} of all votes) as of ${E.asOf}, when the early-vote feed stopped</div>
+      <div style="font-size:26px;font-weight:700">${fmt(cnt)}</div><div class="sub">votes counted so far in each state's top race, all 50 states and DC · results as of ${new Date(R.updated).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
+      <div class="sub">Counts votes in the race with the most votes in each state, so people who skipped it aren't included; total ballots run a little higher.</div>
+      <div style="margin-top:8px" class="sub">Of ${fmt(allElig)} eligible citizens (18+) in the 50 states and DC:</div>
+      ${turnoutBar(cnt / allElig)}
+      <div class="sub">${t22All ? `${cnt >= t22All ? 'up' : 'down'} ${pct(Math.abs(cnt / t22All - 1))} from 2022 · ` : ''}some states are still counting</div>
+      <div style="margin-top:10px"><b>Before Election Day</b></div><div class="sub">${fmt(total)} early and mail ballots as of ${E.asOf}, when the early-vote feed stopped: ${pct(total / cntEV)} of the votes in the ${states.length} places that reported early voting (all but ${Object.keys(POP).filter(st => !EV.has(st)).join(', ')})</div>
       ${spark(nat)}<div class="sub">Cumulative early ballots, ${E.dates[0]} → ${E.asOf}</div>
       <div style="margin-top:10px" class="sub">Party registration of early voters, ${ps.length} states that report it:</div>${partyLine(d3.sum(ps, s => s.dem), d3.sum(ps, s => s.rep), d3.sum(ps, s => s.other), pt)}
       <p class="sub">Registration ≠ vote choice. Click a state for details.</p>`

@@ -218,6 +218,31 @@ async function delaware(year = 2026) {
     countiesIn: 3, countiesAll: 3, state, counties };
 }
 
+// California: UC Berkeley's Statewide Database (the Legislature's redistricting database) publishes, per precinct, registered voters and voters who
+// voted, by party, sex, age band (within party × sex) and surname-identified Latino and Asian voters. Built from county voter files about a year after
+// each election, so it's past elections only. Its vote history matches about 97% of ballots counted, so rates run a little low.
+async function california(year) {
+  const yy = String(year).slice(2), base = `https://statewidedatabase.org/pub/data/G${yy}/state/state_g${yy}_`;
+  const read = async kind => { const z = unzip(fs.readFileSync(await download(`${base}${kind}_by_g${yy}_srprec.zip`, path.join(CACHE, 'ca', `g${yy}_${kind}.zip`))));
+    const [head, ...lines] = Object.values(z)[0].toString('latin1').split(/\r?\n/).filter(Boolean), h = head.split(',');
+    const tot = {}; for (const l of lines) l.split(',').forEach((v, i) => { if (i >= 7) tot[h[i]] = (tot[h[i]] ?? 0) + (+v || 0); });
+    return tot; };
+  const [V, R] = await Promise.all([read('voters'), read('registration')]);
+  const OTHER = ['AIP', 'PAF', 'MSC', 'LIB', 'NLP', 'GRN', 'REF'], ASIAN = ['KOR', 'JPN', 'CHI', 'IND', 'VIET', 'FIL'], P4 = ['DEM', 'REP', 'DCL', 'OTH'];
+  const AGE = { '1824': '18-23', '2534': '24-33', '3544': '34-43', '4554': '44-53', '5564': '54-63', '65PL': '64+', 'UNK': 'Unknown' }; // the codebook's bands: column names say 1824 but mean 18-23
+  const groups = T => {
+    const sum = cols => cols.reduce((a, c) => { if (!(c in T)) throw new Error('CA layout changed: no ' + c); return a + T[c]; }, 0);
+    const age = Object.fromEntries(Object.entries(AGE).map(([code, label]) => [label, sum(P4.flatMap(p => ['M', 'F'].map(x => p + x + code)))]));
+    return { total: T.TOTREG_R,
+      party: { Democratic: T.DEM, Republican: T.REP, 'No party preference': T.DCL, 'Other parties': sum(OTHER) },
+      sex: { Female: T.FEMALE, Male: T.MALE, 'Not stated': T.TOTREG_R - T.FEMALE - T.MALE }, age,
+      ethnicity: { 'Latino (by surname)': sum(['DEM', 'REP', 'DCL', 'OTH'].map(p => 'HISP' + p)), 'Asian (by surname)': sum(ASIAN.flatMap(a => ['DEM', 'REP', 'DCL', 'OTH'].map(p => a + p))) } }; };
+  const v = groups(V), r = groups(R), state = { reg: r.total, voted: v.total, method: {}, by: {} };
+  for (const dim of ['party', 'sex', 'age', 'ethnicity']) state.by[dim] = Object.fromEntries(Object.keys(v[dim]).filter(k => k !== 'Unknown' && r[dim][k] > 0).map(k => [k, { reg: r[dim][k], voted: v[dim][k] }])); // empty groups (e.g. sex not stated) left out
+  for (const [name, g] of [['party', v.party], ['age', v.age]]) { const s = Object.values(g).reduce((a, b) => a + b, 0); if (s !== v.total) throw new Error(`CA ${year}: ${name} adds to ${s}, total ${v.total}`); }
+  return { state, counties: {}, countiesIn: 0, countiesAll: 0 };
+}
+
 function rollup(counties) { // statewide totals = sum of counties
   const state = { reg: 0, voted: 0, method: {}, by: {} };
   for (const c of Object.values(counties)) { state.reg += c.reg; state.voted += c.voted;
@@ -264,13 +289,17 @@ const PAST = {
   Washington: ['2024', '2022', '2020', '2018', '2016', '2014', '2012', '2010'].map(y => [y, () => washington(+y)]),
   Pennsylvania: [['2024', () => pennsylvania('https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/bulk-data/2024-general-election/voter%20registration%20-%20vote%20history%20summary%20-%202024%20general.xlsx')]],
   Delaware: ['2024', '2022', '2020'].map(y => [y, () => delaware(+y)]), // 2018 and earlier use an older report layout
+  California: ['2024', '2022'].map(y => [y, () => california(+y)]),
+};
+const PAST_NOTES = { // shown under a state's past-records grid when its source needs explaining
+  California: "From UC Berkeley's Statewide Database, built from county voter files. Its vote history matches about 97% of ballots counted (2024: 15.6 million of 16.1 million certified), so rates run about 2 points low. Latino and Asian voters are identified by surname, an estimate.",
 };
 async function buildPast() {
   const out = {};
   for (const [st, years] of Object.entries(PAST)) for (const [y, load] of years)
     for (let tries = 1; ; tries++) try { const { state: s } = await load(); ((out[st] ??= {})[y] = { reg: s.reg, voted: s.voted, by: s.by, method: s.method }); break; }
       catch (e) { if (tries === 3) { console.warn(`skipped ${st} ${y}: ${e.message}`); break; } } // downloads occasionally drop
-  fs.writeFileSync(path.join(__dirname, 'state-past-data.js'), `// Built by state-demo.js --past on ${new Date().toISOString()}\nwindow.STATE_PAST = ${JSON.stringify(out)};\n`);
+  fs.writeFileSync(path.join(__dirname, 'state-past-data.js'), `// Built by state-demo.js --past on ${new Date().toISOString()}\nwindow.STATE_PAST = ${JSON.stringify(out)};\nwindow.STATE_PAST_NOTES = ${JSON.stringify(PAST_NOTES)};\n`);
   for (const [st, ys] of Object.entries(out)) console.log(`${st}: ${Object.entries(ys).map(([y, d]) => `${y} ${(d.voted / d.reg * 100).toFixed(1)}%`).join(' · ')}`);
 }
 

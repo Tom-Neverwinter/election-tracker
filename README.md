@@ -52,7 +52,7 @@ There is no build step and no server. `index.html` is the whole app; it loads D3
 | `measures-results.js` | `measures-results-data.js` | Wikipedia's 2026 ballot measures table, NBC News, and each measure's Wikipedia page |
 | `legislature-results.js` | `legislature-results-data.js` | Wikipedia, 2026 state legislative elections |
 | `state-demo.js` | `state-demo-data.js` | State election offices: North Carolina, Louisiana, Colorado; Washington, Pennsylvania and Delaware switch on when they post 2026 |
-| `state-demo.js --past` (once) | `state-past-data.js` | Same state files for past general elections: North Carolina 2020–2024, Washington 2010–2024, Pennsylvania 2024, Delaware 2020–2024 |
+| `state-demo.js --past` (once) | `state-past-data.js` | Same state files for past general elections: North Carolina 2020–2024, Washington 2010–2024, Pennsylvania 2024, Delaware 2020–2024; California 2022–2024 from UC Berkeley's Statewide Database |
 | — | `recount-rules.js` (by hand) | Recount laws (NASS summary and state statutes) and the status of close races, each with a source |
 | `eligible.js` (yearly, not hourly) | `eligible-data.js` | Census Bureau American Community Survey 2020–2024 |
 | `cps.js` (after each Census release) | `cps-data.js` | Census Current Population Survey voting supplement, 2016–2024: turnout by age, sex and race for every state |

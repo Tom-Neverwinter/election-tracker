@@ -123,7 +123,10 @@ const marketScore = p => Math.max(-3, Math.min(3, (p - 0.5) * 6.6)); // ponytail
 
 async function build(office) {
   const page = PAGES[office];
-  const idx = (await wiki({ action: 'parse', page, prop: 'sections' })).parse.sections.find(s => s.line.trim().toLowerCase() === 'predictions').index;
+  const secs = (await wiki({ action: 'parse', page, prop: 'sections' })).parse.sections, name = s => s.line.trim().toLowerCase();
+  const sec = secs.find(s => name(s) === 'predictions') ?? secs.find(s => /predictions/.test(name(s))); // editors renamed it "Final pre-election predictions" after the election
+  if (!sec) throw new Error(`no predictions section on ${page}`);
+  const idx = sec.index;
   const text = (await wiki({ action: 'parse', page, prop: 'wikitext', section: idx })).parse.wikitext['*'];
   const [names, rows] = parseTable(text);
   const word = office === 'governor' ? 'Governor' : 'Senate';

@@ -14,7 +14,11 @@ log('snapshot: ' + run(process.execPath, ['snapshot.js']));
 log('results: ' + run(process.execPath, ['results.js']));
 log('measures: ' + run(process.execPath, ['measures-results.js']));
 log('legislatures: ' + run(process.execPath, ['legislature-results.js']));
+const whoVoted = () => { try { global.window = {}; delete require.cache[require.resolve('./state-demo-data.js')]; require('./state-demo-data.js'); return Object.keys(global.window.STATE_DEMO ?? {}); } catch { return []; } };
+const before = whoVoted();
 log('state demographics: ' + run(process.execPath, ['state-demo.js']));
+const arrived = whoVoted().filter(st => !before.includes(st)); // a state's 2026 who-voted file showed up this hour
+if (arrived.length) log(`NEW who-voted data: ${arrived.join(', ')}`);
 log('badges: ' + run(process.execPath, ['badges.js']));
 
 const history = load('history.js', 'window.HISTORY = ');
@@ -25,13 +29,14 @@ fs.writeFileSync(path.join(dir, 'hourly', stamp + '.json'), JSON.stringify({ cap
 try { require('./hourly-index.js').build(); } catch (e) { log('index failed: ' + e.message); }
 run('git', ['add', 'history.js', 'results-data.js', 'measures-results-data.js', 'legislature-results-data.js', 'state-demo-data.js', 'badges', 'hourly']);
 if (require('child_process').spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: dir }).status === 1) { // 1 = something staged
-  run('git', ['commit', '-q', '-m', `hourly ${stamp}`]);
+  run('git', ['commit', '-q', '-m', `hourly ${stamp}${arrived.length ? ` · new who-voted data: ${arrived.join(', ')}` : ''}`]);
   run('git', ['pull', '-q', '--rebase', '--autostash']); // autostash: uncommitted work in the folder must not block the hourly push
   log('push: ' + (run('git', ['push', '-q']) ?? 'FAILED'));
 }
 const res = load('results-data.js', 'window.RESULTS = '), races = (res?.races ?? []).filter(r => 'SGH'.includes(r.office));
-if (races.length >= 506 && !res.failed?.length && races.every(r => r.called)) { // 35 S + 36 G + 435 H, all called: we're done
-  log('all races called; removing the scheduled task');
+// Stop only when every race is called AND the who-voted files states post after certification (Dec–Jan) have had time to arrive.
+if (races.length >= 506 && !res.failed?.length && races.every(r => r.called) && now >= new Date('2027-02-01')) { // 35 S + 36 G + 435 H
+  log('all races called and the who-voted window has passed; removing the scheduled task');
   run('powershell', ['-NoProfile', '-Command', 'Unregister-ScheduledTask ElectionTrackerHourly -Confirm:$false']);
 }
 log(`done ${stamp}`);

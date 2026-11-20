@@ -225,9 +225,13 @@ async function california(year) {
   const yy = String(year).slice(2), base = `https://statewidedatabase.org/pub/data/G${yy}/state/state_g${yy}_`;
   const read = async kind => { const z = unzip(fs.readFileSync(await download(`${base}${kind}_by_g${yy}_srprec.zip`, path.join(CACHE, 'ca', `g${yy}_${kind}.zip`))));
     const [head, ...lines] = Object.values(z)[0].toString('latin1').split(/\r?\n/).filter(Boolean), h = head.split(',');
-    const tot = {}; for (const l of lines) l.split(',').forEach((v, i) => { if (i >= 7) tot[h[i]] = (tot[h[i]] ?? 0) + (+v || 0); });
-    return tot; };
-  const [V, R] = await Promise.all([read('voters'), read('registration')]);
+    const tot = {}, byFips = {}, fi = h.indexOf('FIPS');
+    for (const l of lines) { const c = l.split(','), t = (byFips[c[fi]] ??= {}); c.forEach((v, i) => { if (i >= 7) { tot[h[i]] = (tot[h[i]] ?? 0) + (+v || 0); t[h[i]] = (t[h[i]] ?? 0) + (+v || 0); } }); }
+    return { tot, byFips }; };
+  const [{ tot: V, byFips: VC }, { tot: R, byFips: RC }] = await Promise.all([read('voters'), read('registration')]);
+  // County names from the Census Bureau's county code list (the files carry only FIPS codes)
+  const names = Object.fromEntries((await (await fetch('https://www2.census.gov/geo/docs/reference/codes2020/cou/st06_ca_cou2020.txt')).text())
+    .split(/\r?\n/).slice(1).filter(Boolean).map(l => l.split('|')).map(c => ['06' + c[2], c[4].replace(/ County$/, '')]));
   const OTHER = ['AIP', 'PAF', 'MSC', 'LIB', 'NLP', 'GRN', 'REF'], ASIAN = ['KOR', 'JPN', 'CHI', 'IND', 'VIET', 'FIL'], P4 = ['DEM', 'REP', 'DCL', 'OTH'];
   const AGE = { '1824': '18-23', '2534': '24-33', '3544': '34-43', '4554': '44-53', '5564': '54-63', '65PL': '64+', 'UNK': 'Unknown' }; // the codebook's bands: column names say 1824 but mean 18-23
   const groups = T => {
@@ -237,10 +241,116 @@ async function california(year) {
       party: { Democratic: T.DEM, Republican: T.REP, 'No party preference': T.DCL, 'Other parties': sum(OTHER) },
       sex: { Female: T.FEMALE, Male: T.MALE, 'Not stated': T.TOTREG_R - T.FEMALE - T.MALE }, age,
       ethnicity: { 'Latino (by surname)': sum(['DEM', 'REP', 'DCL', 'OTH'].map(p => 'HISP' + p)), 'Asian (by surname)': sum(ASIAN.flatMap(a => ['DEM', 'REP', 'DCL', 'OTH'].map(p => a + p))) } }; };
-  const v = groups(V), r = groups(R), state = { reg: r.total, voted: v.total, method: {}, by: {} };
-  for (const dim of ['party', 'sex', 'age', 'ethnicity']) state.by[dim] = Object.fromEntries(Object.keys(v[dim]).filter(k => k !== 'Unknown' && r[dim][k] > 0).map(k => [k, { reg: r[dim][k], voted: v[dim][k] }])); // empty groups (e.g. sex not stated) left out
-  for (const [name, g] of [['party', v.party], ['age', v.age]]) { const s = Object.values(g).reduce((a, b) => a + b, 0); if (s !== v.total) throw new Error(`CA ${year}: ${name} adds to ${s}, total ${v.total}`); }
-  return { state, counties: {}, countiesIn: 0, countiesAll: 0 };
+  const unit = (Vt, Rt) => { const v = groups(Vt), r = groups(Rt), u = { reg: r.total, voted: v.total, method: {}, complete: true, by: {} };
+    for (const dim of ['party', 'sex', 'age', 'ethnicity']) u.by[dim] = Object.fromEntries(Object.keys(v[dim]).filter(k => k !== 'Unknown' && r[dim][k] > 0).map(k => [k, { reg: r[dim][k], voted: v[dim][k] }])); // empty groups (e.g. sex not stated) left out
+    for (const [name, g] of [['party', v.party], ['age', v.age]]) { const s = Object.values(g).reduce((a, b) => a + b, 0); if (s !== v.total) throw new Error(`CA ${year}: ${name} adds to ${s}, total ${v.total}`); }
+    return u; };
+  const state = unit(V, R), counties = {};
+  for (const f of Object.keys(RC)) { if (!names[f]) throw new Error(`CA: no county name for FIPS ${f}`); counties[names[f]] = unit(VC[f] ?? {}, RC[f]); }
+  if (Object.keys(counties).length !== 58) throw new Error(`CA: ${Object.keys(counties).length} counties`);
+  const cs = rollup(counties); if (cs.voted !== state.voted || cs.reg !== state.reg) throw new Error(`CA: counties add to ${cs.voted}, state ${state.voted}`);
+  return { state, counties, countiesIn: 58, countiesAll: 58 };
+}
+
+// South Carolina's voter registration system (VREMS) serves voter-history statistics per county: registered and voted, each broken down by race, sex and
+// four age bands (separate totals, not crossed). No party (South Carolina has no party registration). One request each for voted and registered.
+async function southCarolina(year) {
+  const get = async type => { const res = await fetch(`https://vrems.scvotes.sc.gov/Statistics/GetVoterHistoryResultsByCounty?dataType=${type}&year=${year}&electionType=GEN`, { headers: { 'User-Agent': 'ElectionTracker/1.0 (personal project)' } });
+    if (!res.ok) throw new Error(`${year} general not posted yet (VREMS ${res.status})`); // asking for an election it lacks gives a server error
+    const j = (await res.json()).voterHistoryResults; if (!j?.countyPrecinctResults?.length) throw new Error(`${year} general not posted yet`); return j; };
+  const [V, R] = await Promise.all([get('VOT'), get('REG')]);
+  const ages = [1, 2, 3, 4].map(i => V[`ageRange${i}Label`].replace(/-up$/, '+').replace(/^Under 25$/, '18-24')); // bands differ by year (2018 and earlier: 18-21, 22-34, 35-64, 65+)
+  if (ages.some(a => !/^\d+(-\d+|\+)$/.test(a))) throw new Error('SC layout changed: age bands ' + ages);
+  const allRaces = V.countyPrecinctResults.some(r => r.county && r.showAllRaces); // 2022 and earlier report only White vs Nonwhite
+  const RACE = allRaces ? { white: 'White', blackAA: 'Black', hispanic: 'Hispanic', asian: 'Asian', nativeAmerican: 'American Indian', multiple: 'Two or more', other: 'Other', unknown: 'Not stated' } : { white: 'White', nonwhite: 'Nonwhite' };
+  const SEX = { female: 'Female', male: 'Male', unknownGender: 'Not stated' };
+  const breakdown = (row, total) => { const by = { race: {}, sex: {}, age: {} };
+    for (const [k, l] of Object.entries(RACE)) by.race[l] = row[k]; for (const [k, l] of Object.entries(SEX)) by.sex[l] = row[k];
+    ages.forEach((l, i) => by.age[l] = row[`ageRange${i + 1}`]);
+    for (const [dim, g] of Object.entries(by)) { const s = Object.values(g).reduce((a, b) => a + b, 0), gap = Math.abs(s - row[total]); // older years miss a voter here and there (no birth date)
+      if (gap > Math.max(5, row[total] * 1e-4)) throw new Error(`SC ${year} ${row.county}: ${dim} adds to ${s}, total ${row[total]}`);
+      if (gap) console.warn(`SC ${year} ${row.county}: ${dim} adds to ${s}, total ${row[total]} (source gap of ${gap})`); }
+    return by; };
+  const regBy = Object.fromEntries(R.countyPrecinctResults.filter(r => r.county && !r.isSummary).map(r => [r.county, r]));
+  const counties = {};
+  for (const v of V.countyPrecinctResults.filter(r => r.county && !r.isSummary)) { const r = regBy[v.county]; if (!r) throw new Error('SC: no registration row for ' + v.county);
+    const bv = breakdown(v, 'totalVoting'), br = breakdown(r, 'totalRegistered'), c = { reg: r.totalRegistered, voted: v.totalVoting, method: {}, complete: true, by: {} };
+    for (const dim of Object.keys(bv)) c.by[dim] = Object.fromEntries(Object.keys(bv[dim]).filter(k => br[dim][k] > 0).map(k => [k, { reg: br[dim][k], voted: bv[dim][k] }]));
+    counties[title(v.county)] = c; }
+  const state = rollup(counties), tot = V.countyPrecinctResults.find(r => r.isSummary);
+  if (tot && Math.abs(tot.totalVoting - state.voted) > 25) throw new Error(`SC ${year}: counties add to ${state.voted}, Totals row says ${tot.totalVoting}`); // a handful of voters have no county
+  if (Object.keys(counties).length !== 46) throw new Error(`SC: ${Object.keys(counties).length} counties`);
+  return { state, counties, countiesIn: 46, countiesAll: 46 };
+}
+
+// Kentucky's State Board of Elections posts "Voter Turnout by Age and Sex" PDFs per general election: registered, voted and % by 5 age groups × sex,
+// for all voters and by party (Democratic, Republican, other), statewide and for each district and county. Text is pulled out with Python's pypdf.
+const KY_PDF = { 2024: '2024G%20Voter%20Turnout%20Age%2c%20Gender%2c%20Party.pdf', 2022: 'General2022AgeSex.pdf', 2020: 'voterturnoutagesex-2020G-20210302-043012.pdf' };
+function pdfText(file) { // shortcut: needs Python with pypdf; fine for the once-off --past build, not for the hourly job
+  return require('child_process').execFileSync('python', ['-c', 'import pypdf,sys\nr=pypdf.PdfReader(sys.argv[1])\nsys.stdout.buffer.write("\\n".join(p.extract_text() for p in r.pages).encode("utf8"))', file], { maxBuffer: 1e8 }).toString('utf8');
+}
+async function kentucky(year) {
+  let file = KY_PDF[year];
+  if (!file) { // a new election: look for its general-election PDF on the turnout page (file names change every year)
+    const html = await (await fetch('https://elect.ky.gov/Resources/Pages/Turnout.aspx', { headers: { 'User-Agent': 'ElectionTracker/1.0 (personal project)' } })).text();
+    file = [...html.matchAll(/href="[^"]*\/Documents\/([^"]+\.pdf)"/gi)].map(m => m[1])
+      .find(f => { const d = decodeURIComponent(f); return (d.includes(`${year}G`) || d.includes(`General${year}`) || d.includes(`${year}-G`)) && /age|gender|sex/i.test(d) && !/primary/i.test(d); });
+    if (!file) throw new Error(`${year} general not posted yet`); }
+  const text = pdfText(await download('https://elect.ky.gov/Resources/Documents/' + file, path.join(CACHE, 'ky', `${year}.pdf`)));
+  const num = s => +s.replace(/,/g, ''), sections = {}; let cur = null, age = null;
+  for (const line of text.split(/\r?\n/)) {
+    const h = line.match(/^([A-Z][A-Z .']+) County$/) ?? (line.trim() === 'Statewide' ? [null, 'STATEWIDE'] : null);
+    if (h) { cur = sections[h[1]] = { ages: {}, all: null, sex: {} }; age = null; continue; }
+    if (/^(Congressional|Senate|House) District|^Supreme Court/.test(line)) { cur = null; continue; }
+    if (!cur) continue;
+    const m = line.match(/^(Age Group \d \(([^)]+)\)|All Ages|Females|Males|None)\s+([\d,]+)\s+([\d,]+)\s+\S+\s+([\d,]+)\s+([\d,]+)\s+\S+\s+([\d,]+)\s+([\d,]+)\s+\S+\s+([\d,]+)\s+([\d,]+)\s+\S+/);
+    if (!m) continue;
+    const v = { reg: num(m[3]), voted: num(m[4]), party: { Democratic: { reg: num(m[5]), voted: num(m[6]) }, Republican: { reg: num(m[7]), voted: num(m[8]) }, 'Other parties': { reg: num(m[9]), voted: num(m[10]) } } };
+    if (m[2]) { age = m[2].replace(/ & over/, '+'); cur.ages[age] = v; }
+    else if (m[1] === 'All Ages') { age = 'ALL'; cur.all = v; }
+    else if (age === 'ALL') cur.sex[{ Females: 'Female', Males: 'Male', None: 'Not stated' }[m[1]]] = v;
+  }
+  const unit = (s, name) => { if (!s.all) throw new Error(`KY ${year} ${name}: no All Ages row`);
+    const u = { reg: s.all.reg, voted: s.all.voted, method: {}, complete: true, by: { age: {}, sex: {}, party: s.all.party } };
+    for (const [k, v] of Object.entries(s.ages)) u.by.age[k] = { reg: v.reg, voted: v.voted };
+    for (const [k, v] of Object.entries(s.sex)) if (v.reg > 0) u.by.sex[k] = { reg: v.reg, voted: v.voted };
+    for (const dim of ['age', 'sex', 'party']) { const sv = Object.values(u.by[dim]).reduce((a, g) => a + g.voted, 0); if (sv !== u.voted) throw new Error(`KY ${year} ${name}: ${dim} adds to ${sv}, total ${u.voted}`); }
+    return u; };
+  const counties = Object.fromEntries(Object.entries(sections).filter(([k]) => k !== 'STATEWIDE').map(([k, s]) => [title(k), unit(s, k)]));
+  if (Object.keys(counties).length !== 120) throw new Error(`KY ${year}: ${Object.keys(counties).length} counties`);
+  const state = unit(sections.STATEWIDE, 'Statewide'), cs = rollup(counties);
+  if (cs.voted !== state.voted || cs.reg !== state.reg) throw new Error(`KY ${year}: counties add to ${cs.voted}/${cs.reg}, statewide ${state.voted}/${state.reg}`);
+  return { state, counties, countiesIn: 120, countiesAll: 120 };
+}
+
+// Maryland's State Board of Elections posts "Official Turnout (By Party and County)": a Statewide block, then one block per party, each with ballots by
+// method and eligible voters for the 24 local boards. Blocks shift between columns A and B, so values are read relative to the "LBE" header cell.
+const MD_FILE = { 2026: '2026_stats/GG26/Official%20by%20Party%20and%20County.xlsx', 2024: '2024_stats/PG24/Official%20by%20Party%20and%20County.xlsx', 2022: '2022_stats/GG22/Updated-Official_by_Party_and_County.xlsx' };
+async function maryland(year) {
+  const f = await download('https://elections.maryland.gov/press_room/' + MD_FILE[year], path.join(CACHE, 'md', `${year}.xlsx`));
+  if (fs.readFileSync(f).subarray(0, 2).toString() !== 'PK') throw new Error(`${year} general not posted yet`); // the site answers missing files with an HTML page and HTTP 200
+  const R = Object.values(sheets(f))[0];
+  const PARTY = { Democrat: 'Democratic', Republican: 'Republican', Unaffiliated: 'Unaffiliated' }; // every other block (Libertarian, Green, NLM, Other Parties...) is "Other parties"
+  const blocks = {}; let label = null;
+  for (let i = 0; i < R.length; i++) { const r = R[i] ?? [], j = r.indexOf('LBE');
+    if (j < 0) { const t = r.find(x => typeof x === 'string' && x.trim()); if (t && !/TOTAL|Official|Election|^\s*$/i.test(t) && r.filter(x => x !== null && x !== '').length === 1) label = t.trim(); continue; }
+    if (!label) throw new Error('MD: block without a heading at row ' + i);
+    const key = label === 'Statewide' ? 'Statewide' : PARTY[label] ?? 'Other parties', b = (blocks[key] ??= {});
+    for (let k = i + 1; k < R.length && R[k]?.[j] && R[k][j] !== 'TOTAL'; k++) { const c = R[k], n = x => +c[j + x] || 0, cty = String(c[j]).trim();
+      const e = (b[cty] ??= { voted: 0, reg: 0 }); e.voted += n(4) + n(8) + n(10) + n(12); e.reg += n(14); }
+    label = null; }
+  if (!blocks.Statewide || !blocks.Democratic || !blocks.Republican) throw new Error(`MD ${year}: missing blocks (${Object.keys(blocks)})`);
+  const counties = {};
+  for (const [cty, t] of Object.entries(blocks.Statewide)) {
+    const c = { reg: t.reg, voted: t.voted, method: {}, complete: true, by: { party: {} } };
+    for (const p of ['Democratic', 'Republican', 'Unaffiliated', 'Other parties']) if (blocks[p]?.[cty]) c.by.party[p] = { reg: blocks[p][cty].reg, voted: blocks[p][cty].voted };
+    let sv = Object.values(c.by.party).reduce((a, g) => a + g.voted, 0), sr = Object.values(c.by.party).reduce((a, g) => a + g.reg, 0);
+    const dv = c.voted - sv, dr = c.reg - sr; // the 2022 file leaves one minor party out of the breakdown (about 0.1% in every county)
+    if (dv < 0 || dr < 0 || dr > c.reg * 0.01) throw new Error(`MD ${year} ${cty}: parties add to ${sv}/${sr}, county total ${c.voted}/${c.reg}`);
+    if (dv || dr) { const o = (c.by.party['Other parties'] ??= { reg: 0, voted: 0 }); o.voted += dv; o.reg += dr; } // those voters belong to no listed party
+    counties[cty] = c; }
+  if (Object.keys(counties).length !== 24) throw new Error(`MD ${year}: ${Object.keys(counties).length} jurisdictions`);
+  return { state: rollup(counties), counties, countiesIn: 24, countiesAll: 24 };
 }
 
 function rollup(counties) { // statewide totals = sum of counties
@@ -276,7 +386,10 @@ const STATUS = {
 
 async function main() {
   const out = {}, errs = [];
-  for (const [st, load] of [['North Carolina', northCarolina], ['Louisiana', louisiana], ['Washington', washington], ['Colorado', colorado], ['Pennsylvania', () => pennsylvania()], ['Delaware', () => delaware()]]) try { out[st] = await load(); } catch (e) { errs.push(`${st}: ${e.message}`); } // one state failing keeps the others
+  for (const [st, load] of [['North Carolina', northCarolina], ['Louisiana', louisiana], ['Washington', washington], ['Colorado', colorado], ['Pennsylvania', () => pennsylvania()], ['Delaware', () => delaware()],
+    ['South Carolina', () => southCarolina(2026).then(d => ({ ...d, source: 'South Carolina Election Commission voter history statistics (VREMS)', url: 'https://vrems.scvotes.sc.gov/Statistics/VoterHistory', note: 'South Carolina reports turnout by race, sex and age per county; it has no party registration.' }))],
+    ['Maryland', () => maryland(2026).then(d => ({ ...d, source: 'Maryland State Board of Elections official turnout by party and county', url: 'https://elections.maryland.gov/press_room/index.html', note: 'Maryland reports turnout by party only. Registered = eligible voters.' }))],
+    ['Kentucky', () => kentucky(2026).then(d => ({ ...d, source: 'Kentucky State Board of Elections turnout by age, sex and party', url: 'https://elect.ky.gov/Resources/Pages/Turnout.aspx', note: 'Kentucky labels these turnout reports unofficial. Its youngest group includes 17-year-olds registered to vote at 18.' }))]]) try { out[st] = await load(); } catch (e) { errs.push(`${st}: ${e.message}`); } // one state failing keeps the others
   if (!Object.keys(out).length) throw new Error(errs.join('; '));
   for (const e of errs) console.warn('skipped ' + e);
   const status = Object.fromEntries(Object.entries(STATUS).filter(([st]) => !out[st]));
@@ -290,14 +403,21 @@ const PAST = {
   Pennsylvania: [['2024', () => pennsylvania('https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/bulk-data/2024-general-election/voter%20registration%20-%20vote%20history%20summary%20-%202024%20general.xlsx')]],
   Delaware: ['2024', '2022', '2020'].map(y => [y, () => delaware(+y)]), // 2018 and earlier use an older report layout
   California: ['2024', '2022'].map(y => [y, () => california(+y)]),
+  'South Carolina': ['2024', '2022', '2020', '2018', '2016', '2014', '2012', '2010'].map(y => [y, () => southCarolina(+y)]),
+  Kentucky: ['2024', '2022', '2020'].map(y => [y, () => kentucky(+y)]),
+  Maryland: ['2024', '2022'].map(y => [y, () => maryland(+y)]),
 };
 const PAST_NOTES = { // shown under a state's past-records grid when its source needs explaining
+  Maryland: "From the Maryland State Board of Elections' official turnout by party and county (eligible voters and ballots cast). Maryland doesn't break turnout down by age, race or sex.",
+  Kentucky: "From the Kentucky State Board of Elections' turnout reports by age, sex and party (it labels them unofficial). Kentucky's youngest group includes 17-year-olds registered to vote at 18.",
+  'South Carolina': "From South Carolina's voter registration system (VREMS) statistics, which count voters by race, sex and age within each county. South Carolina has no party registration. Registered counts every voter on its rolls, so rates can run below turnout figures quoted using active voters only.",
   California: "From UC Berkeley's Statewide Database, built from county voter files. Its vote history matches about 97% of ballots counted (2024: 15.6 million of 16.1 million certified), so rates run about 2 points low. Latino and Asian voters are identified by surname, an estimate.",
 };
 async function buildPast() {
   const out = {};
   for (const [st, years] of Object.entries(PAST)) for (const [y, load] of years)
-    for (let tries = 1; ; tries++) try { const { state: s } = await load(); ((out[st] ??= {})[y] = { reg: s.reg, voted: s.voted, by: s.by, method: s.method }); break; }
+    for (let tries = 1; ; tries++) try { const { state: s, counties } = await load(); ((out[st] ??= {})[y] = { reg: s.reg, voted: s.voted, by: s.by, method: s.method,
+        counties: Object.fromEntries(Object.entries(counties ?? {}).map(([k, c]) => [k, { reg: c.reg, voted: c.voted, by: c.by }])) }); break; }
       catch (e) { if (tries === 3) { console.warn(`skipped ${st} ${y}: ${e.message}`); break; } } // downloads occasionally drop
   fs.writeFileSync(path.join(__dirname, 'state-past-data.js'), `// Built by state-demo.js --past on ${new Date().toISOString()}\nwindow.STATE_PAST = ${JSON.stringify(out)};\nwindow.STATE_PAST_NOTES = ${JSON.stringify(PAST_NOTES)};\n`);
   for (const [st, ys] of Object.entries(out)) console.log(`${st}: ${Object.entries(ys).map(([y, d]) => `${y} ${(d.voted / d.reg * 100).toFixed(1)}%`).join(' · ')}`);

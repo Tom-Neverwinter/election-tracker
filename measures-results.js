@@ -23,6 +23,7 @@ function parse(wiki) { // [{state, title, text, status, yes}] for November rows
 // Results copied from a state's official site when no automatic source has them (state sites often block automated access).
 const MANUAL = {
   'Florida|Agricultural Tangible Personal Property Tax Exemption Amendment': { result: 'Failed', yes: 58.21, src: 'Florida Division of Elections, floridaelectionwatch.gov (Amendment No. 2: 4,547,646 yes, 3,264,960 no; needs 60%), entered 2026-11-18' },
+  'California|Proposition 4': { result: 'Failed', yes: 49.84, src: 'CalMatters Nov 19: Yes campaign conceded, 49.8% yes with 99% counted (calmatters.org/politics/elections/2026/11/prop-4-defeated); 49.84% from Wikipedia, entered 2026-11-22' },
 };
 
 // The kind of measure plus its number or letter, e.g. "question 3", "amendment j", "proposition 41", "initiative 645", "initiative il26-638"; null if none.
